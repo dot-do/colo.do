@@ -112,3 +112,11 @@ export {
   withSelfRegistration,
   type RegistrationConfig,
 } from './self-registering.js'
+
+// Cache API registry (FREE reads with SWR)
+export {
+  createCachedEnv,
+  CachedRegistryClient,
+  type CacheConfig,
+  type CachedEnvOptions,
+} from './cached-registry.js'
