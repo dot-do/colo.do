@@ -5,10 +5,19 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./tiny": {
+      "types": "./dist/tiny.d.ts",
+      "import": "./dist/tiny.js"
+    },
+    "./minimal": {
+      "types": "./dist/location-only.d.ts",
+      "import": "./dist/location-only.js"
     },
     "./worker": {
       "types": "./dist/worker.d.ts",
