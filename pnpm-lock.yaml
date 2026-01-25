@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      capnweb:
+        specifier: ^0.4.0
+        version: 0.4.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20250121.0
@@ -334,6 +338,9 @@ packages:
   cac@6.7.14:
     resolution: {integrity: sha512-b6Ilus+c3RrdDk+JhLKUAQfzzgLEPy6wcXqS7f/xe1EETvsDP6GORG7SFuOs6cID5YkqchW/LXZbX5bc8j7ZcQ==}
     engines: {node: '>=8'}
+
+  capnweb@0.4.0:
+    resolution: {integrity: sha512-OgqPQcxnrAIqjrkAuwI4N9MP/mzseM5w9oLWb/oU63KveBJl1c8p41etLSVQUlYFiAYZu+h6/LJxKaDJd93xFw==}
 
   chai@5.3.3:
     resolution: {integrity: sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw==}
@@ -713,6 +720,8 @@ snapshots:
   assertion-error@2.0.1: {}
 
   cac@6.7.14: {}
+
+  capnweb@0.4.0: {}
 
   chai@5.3.3:
     dependencies:

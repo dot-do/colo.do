@@ -5,20 +5,23 @@
  *
  * @example
  * ```typescript
- * import { createInColo, findNearestColo, createReplicas } from 'colo.do'
+ * import { createBufferedEnv } from 'colo.do'
+ * import { env } from 'cloudflare:workers'
  *
- * // Create a DO in a specific colo
- * const stub = createInColo(env.MY_DO, { colo: 'LAX', id: 'my-instance' })
- *
- * // Create replicas across multiple colos
- * const replicas = createReplicas(env.MY_DO, {
- *   id: 'shared-data',
- *   colos: ['IAD', 'ORD', 'SFO', 'LHR']
+ * // Recommended: Buffered environment wrapper (handles traffic spikes)
+ * const $ = createBufferedEnv(env, {
+ *   registry: env.REGISTRY_DO,
+ *   bucket: env.REGISTRY_BUCKET,
  * })
  *
- * // Route to the nearest replica
- * const nearest = findNearestColo(request, ['IAD', 'ORD', 'SFO', 'LHR'])
- * const result = await replicas[nearest].getData()
+ * // Create a PostgresDO in LAX (instant, registration is async)
+ * const { stub, name } = $.create.POSTGRES({ in: 'LAX' })
+ *
+ * // Get existing DO by name (uses R2 cache)
+ * const result = await $.get.POSTGRES('my-database')
+ *
+ * // Don't forget to flush in waitUntil
+ * ctx.waitUntil($.flush())
  * ```
  *
  * @packageDocumentation
@@ -47,7 +50,7 @@ export {
   type LocationInfo,
 } from './location.js'
 
-// DO targeting and management
+// DO targeting (simple, no registry)
 export {
   targetColo,
   createInColo,
@@ -61,5 +64,51 @@ export {
   type MoveOptions,
 } from './targeting.js'
 
-// Re-export for convenience
-export { ColoAwareDO, type ColoContext } from './do.js'
+// Colo-aware DO base class
+export {
+  ColoAwareDO,
+  withColoAwareness,
+  addWorkerColoHeader,
+  type ColoContext,
+} from './do.js'
+
+// Registry (name→ID mapping with colo tracking)
+export {
+  RegistryDO,
+  RegistryClient,
+  type RegistryEntry,
+  type RegistrySnapshot,
+  type CreateOptions,
+  type GetOptions,
+  type LookupResult,
+  type RegistryEnv,
+} from './registry.js'
+
+// Environment wrapper (simple API)
+export {
+  wrapEnv,
+  invalidateCache,
+  clearCache,
+  type WrapEnvOptions,
+  type WrappedEnv,
+  type CreateResult,
+  type GetResult,
+} from './env.js'
+
+// Buffered registry (handles traffic spikes)
+export {
+  createBufferedEnv,
+  generateLocalId,
+  parseLocalId,
+  RegistrationBuffer,
+  ShardedRegistry,
+  type BufferConfig,
+  type BufferedEnvOptions,
+} from './buffered-registry.js'
+
+// Self-registering DO pattern
+export {
+  SelfRegisteringDO,
+  withSelfRegistration,
+  type RegistrationConfig,
+} from './self-registering.js'

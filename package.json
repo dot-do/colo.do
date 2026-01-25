@@ -54,5 +54,8 @@
     "@cloudflare/workers-types": {
       "optional": true
     }
+  },
+  "dependencies": {
+    "capnweb": "^0.4.0"
   }
 }
