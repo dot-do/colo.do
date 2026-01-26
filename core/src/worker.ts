@@ -57,140 +57,146 @@ export interface Env {
 }
 
 // City name mapping for locations object - all DO-capable colos (PascalCase)
+// Flat lookup for getting city name from IATA code
 const colos: Record<string, string> = {
   // North America - West
-  sjc: 'SanJose',
-  lax: 'LosAngeles',
-  sea: 'Seattle',
-  sfo: 'SanFrancisco',
-  pdx: 'Portland',
-  phx: 'Phoenix',
-  den: 'Denver',
-  slc: 'SaltLakeCity',
-  las: 'LasVegas',
-  san: 'SanDiego',
-  smf: 'Sacramento',
+  sjc: 'SanJose', lax: 'LosAngeles', sea: 'Seattle', sfo: 'SanFrancisco',
+  pdx: 'Portland', phx: 'Phoenix', den: 'Denver', slc: 'SaltLakeCity',
+  las: 'LasVegas', san: 'SanDiego', smf: 'Sacramento',
   // North America - Central
-  ord: 'Chicago',
-  dfw: 'Dallas',
-  iah: 'Houston',
-  msp: 'Minneapolis',
-  mci: 'KansasCity',
-  stl: 'StLouis',
-  aus: 'Austin',
-  sat: 'SanAntonio',
-  oma: 'Omaha',
-  okc: 'OklahomaCity',
+  ord: 'Chicago', dfw: 'Dallas', iah: 'Houston', msp: 'Minneapolis',
+  mci: 'KansasCity', stl: 'StLouis', aus: 'Austin', sat: 'SanAntonio',
+  oma: 'Omaha', okc: 'OklahomaCity',
   // North America - East
-  iad: 'Ashburn',
-  ewr: 'Newark',
-  atl: 'Atlanta',
-  mia: 'Miami',
-  bos: 'Boston',
-  clt: 'Charlotte',
-  dtw: 'Detroit',
-  phl: 'Philadelphia',
-  rdu: 'Raleigh',
-  tpa: 'Tampa',
-  mco: 'Orlando',
-  bna: 'Nashville',
-  ind: 'Indianapolis',
-  cmh: 'Columbus',
-  cle: 'Cleveland',
-  pit: 'Pittsburgh',
-  buf: 'Buffalo',
-  cvg: 'Cincinnati',
-  jax: 'Jacksonville',
+  iad: 'Ashburn', ewr: 'Newark', atl: 'Atlanta', mia: 'Miami', bos: 'Boston',
+  clt: 'Charlotte', dtw: 'Detroit', phl: 'Philadelphia', rdu: 'Raleigh',
+  tpa: 'Tampa', mco: 'Orlando', bna: 'Nashville', ind: 'Indianapolis',
+  cmh: 'Columbus', cle: 'Cleveland', pit: 'Pittsburgh', buf: 'Buffalo',
+  cvg: 'Cincinnati', jax: 'Jacksonville',
   // Canada
-  yyz: 'Toronto',
-  yul: 'Montreal',
-  yvr: 'Vancouver',
-  yyc: 'Calgary',
-  yow: 'Ottawa',
+  yyz: 'Toronto', yul: 'Montreal', yvr: 'Vancouver', yyc: 'Calgary', yow: 'Ottawa',
   // Europe - West
-  lhr: 'London',
-  ams: 'Amsterdam',
-  fra: 'Frankfurt',
-  cdg: 'Paris',
-  mad: 'Madrid',
-  mxp: 'Milan',
-  dub: 'Dublin',
-  zrh: 'Zurich',
-  bru: 'Brussels',
-  mrs: 'Marseille',
-  lis: 'Lisbon',
-  bcn: 'Barcelona',
-  man: 'Manchester',
-  fco: 'Rome',
-  muc: 'Munich',
-  dus: 'Dusseldorf',
-  ham: 'Hamburg',
-  txl: 'Berlin',
-  vie: 'Vienna',
+  lhr: 'London', ams: 'Amsterdam', fra: 'Frankfurt', cdg: 'Paris', mad: 'Madrid',
+  mxp: 'Milan', dub: 'Dublin', zrh: 'Zurich', bru: 'Brussels', mrs: 'Marseille',
+  lis: 'Lisbon', bcn: 'Barcelona', man: 'Manchester', fco: 'Rome', muc: 'Munich',
+  dus: 'Dusseldorf', ham: 'Hamburg', txl: 'Berlin', vie: 'Vienna',
   // Europe - North
-  cph: 'Copenhagen',
-  arn: 'Stockholm',
-  osl: 'Oslo',
-  hel: 'Helsinki',
+  cph: 'Copenhagen', arn: 'Stockholm', osl: 'Oslo', hel: 'Helsinki',
   // Europe - East
-  waw: 'Warsaw',
-  prg: 'Prague',
-  bud: 'Budapest',
+  waw: 'Warsaw', prg: 'Prague', bud: 'Budapest',
   // Asia - East
-  nrt: 'Tokyo',
-  hkg: 'HongKong',
-  icn: 'Seoul',
-  tpe: 'Taipei',
-  kix: 'Osaka',
-  fuk: 'Fukuoka',
-  oka: 'Okinawa',
+  nrt: 'Tokyo', hkg: 'HongKong', icn: 'Seoul', tpe: 'Taipei',
+  kix: 'Osaka', fuk: 'Fukuoka', oka: 'Okinawa',
   // Asia - Southeast
-  sin: 'Singapore',
-  bkk: 'Bangkok',
-  kul: 'KualaLumpur',
-  cgk: 'Jakarta',
-  mnl: 'Manila',
-  sgn: 'HoChiMinhCity',
-  han: 'Hanoi',
+  sin: 'Singapore', bkk: 'Bangkok', kul: 'KualaLumpur', cgk: 'Jakarta',
+  mnl: 'Manila', sgn: 'HoChiMinhCity', han: 'Hanoi',
   // Asia - South
-  bom: 'Mumbai',
-  del: 'Delhi',
-  blr: 'Bangalore',
-  maa: 'Chennai',
-  hyd: 'Hyderabad',
-  ccu: 'Kolkata',
+  bom: 'Mumbai', del: 'Delhi', blr: 'Bangalore', maa: 'Chennai',
+  hyd: 'Hyderabad', ccu: 'Kolkata',
   // Middle East
-  dxb: 'Dubai',
-  tlv: 'TelAviv',
-  doh: 'Doha',
-  auh: 'AbuDhabi',
-  bah: 'Bahrain',
-  kwi: 'Kuwait',
-  mct: 'Muscat',
-  ruh: 'Riyadh',
-  jed: 'Jeddah',
+  dxb: 'Dubai', tlv: 'TelAviv', doh: 'Doha', auh: 'AbuDhabi',
+  bah: 'Bahrain', kwi: 'Kuwait', mct: 'Muscat', ruh: 'Riyadh', jed: 'Jeddah',
   // Oceania
-  syd: 'Sydney',
-  mel: 'Melbourne',
-  akl: 'Auckland',
-  bne: 'Brisbane',
-  per: 'Perth',
-  adl: 'Adelaide',
-  chc: 'Christchurch',
-  wlg: 'Wellington',
+  syd: 'Sydney', mel: 'Melbourne', akl: 'Auckland', bne: 'Brisbane',
+  per: 'Perth', adl: 'Adelaide', chc: 'Christchurch', wlg: 'Wellington',
   // South America
-  gru: 'SaoPaulo',
-  gig: 'RioDeJaneiro',
-  eze: 'BuenosAires',
-  scl: 'Santiago',
-  bog: 'Bogota',
-  lim: 'Lima',
+  gru: 'SaoPaulo', gig: 'RioDeJaneiro', eze: 'BuenosAires',
+  scl: 'Santiago', bog: 'Bogota', lim: 'Lima',
   // Africa
-  jnb: 'Johannesburg',
-  cpt: 'CapeTown',
-  cai: 'Cairo',
-  los: 'Lagos',
-  nbo: 'Nairobi',
+  jnb: 'Johannesburg', cpt: 'CapeTown', cai: 'Cairo', los: 'Lagos', nbo: 'Nairobi',
+}
+
+// Organized by region for the locations response
+const colosByRegion: Record<string, Record<string, Record<string, string>>> = {
+  NorthAmerica: {
+    West: {
+      sjc: 'SanJose', lax: 'LosAngeles', sea: 'Seattle', sfo: 'SanFrancisco',
+      pdx: 'Portland', phx: 'Phoenix', den: 'Denver', slc: 'SaltLakeCity',
+      las: 'LasVegas', san: 'SanDiego', smf: 'Sacramento',
+    },
+    Central: {
+      ord: 'Chicago', dfw: 'Dallas', iah: 'Houston', msp: 'Minneapolis',
+      mci: 'KansasCity', stl: 'StLouis', aus: 'Austin', sat: 'SanAntonio',
+      oma: 'Omaha', okc: 'OklahomaCity',
+    },
+    East: {
+      iad: 'Ashburn', ewr: 'Newark', atl: 'Atlanta', mia: 'Miami', bos: 'Boston',
+      clt: 'Charlotte', dtw: 'Detroit', phl: 'Philadelphia', rdu: 'Raleigh',
+      tpa: 'Tampa', mco: 'Orlando', bna: 'Nashville', ind: 'Indianapolis',
+      cmh: 'Columbus', cle: 'Cleveland', pit: 'Pittsburgh', buf: 'Buffalo',
+      cvg: 'Cincinnati', jax: 'Jacksonville',
+    },
+  },
+  Canada: {
+    _: { yyz: 'Toronto', yul: 'Montreal', yvr: 'Vancouver', yyc: 'Calgary', yow: 'Ottawa' },
+  },
+  Europe: {
+    West: {
+      lhr: 'London', ams: 'Amsterdam', fra: 'Frankfurt', cdg: 'Paris', mad: 'Madrid',
+      mxp: 'Milan', dub: 'Dublin', zrh: 'Zurich', bru: 'Brussels', mrs: 'Marseille',
+      lis: 'Lisbon', bcn: 'Barcelona', man: 'Manchester', fco: 'Rome', muc: 'Munich',
+      dus: 'Dusseldorf', ham: 'Hamburg', txl: 'Berlin', vie: 'Vienna',
+    },
+    North: { cph: 'Copenhagen', arn: 'Stockholm', osl: 'Oslo', hel: 'Helsinki' },
+    East: { waw: 'Warsaw', prg: 'Prague', bud: 'Budapest' },
+  },
+  Asia: {
+    East: {
+      nrt: 'Tokyo', hkg: 'HongKong', icn: 'Seoul', tpe: 'Taipei',
+      kix: 'Osaka', fuk: 'Fukuoka', oka: 'Okinawa',
+    },
+    Southeast: {
+      sin: 'Singapore', bkk: 'Bangkok', kul: 'KualaLumpur', cgk: 'Jakarta',
+      mnl: 'Manila', sgn: 'HoChiMinhCity', han: 'Hanoi',
+    },
+    South: {
+      bom: 'Mumbai', del: 'Delhi', blr: 'Bangalore', maa: 'Chennai',
+      hyd: 'Hyderabad', ccu: 'Kolkata',
+    },
+  },
+  MiddleEast: {
+    _: {
+      dxb: 'Dubai', tlv: 'TelAviv', doh: 'Doha', auh: 'AbuDhabi',
+      bah: 'Bahrain', kwi: 'Kuwait', mct: 'Muscat', ruh: 'Riyadh', jed: 'Jeddah',
+    },
+  },
+  Oceania: {
+    _: {
+      syd: 'Sydney', mel: 'Melbourne', akl: 'Auckland', bne: 'Brisbane',
+      per: 'Perth', adl: 'Adelaide', chc: 'Christchurch', wlg: 'Wellington',
+    },
+  },
+  SouthAmerica: {
+    _: {
+      gru: 'SaoPaulo', gig: 'RioDeJaneiro', eze: 'BuenosAires',
+      scl: 'Santiago', bog: 'Bogota', lim: 'Lima',
+    },
+  },
+  Africa: {
+    _: { jnb: 'Johannesburg', cpt: 'CapeTown', cai: 'Cairo', los: 'Lagos', nbo: 'Nairobi' },
+  },
+}
+
+// Build nested locations URLs from the region structure
+function buildLocationsByRegion(pathname: string, search: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [region, subregions] of Object.entries(colosByRegion)) {
+    const regionResult: Record<string, unknown> = {}
+    for (const [subregion, cities] of Object.entries(subregions)) {
+      const subregionResult: Record<string, string> = {}
+      for (const [code, name] of Object.entries(cities)) {
+        subregionResult[name] = `https://${code}.colo.do${pathname}${search}`
+      }
+      if (subregion === '_') {
+        // Flatten single-level regions (Canada, MiddleEast, etc.)
+        Object.assign(regionResult, subregionResult)
+      } else {
+        regionResult[subregion] = subregionResult
+      }
+    }
+    result[region] = regionResult
+  }
+  return result
 }
 
 /**
@@ -443,14 +449,8 @@ export class Colo {
       city: colos[this.colo.toLowerCase()] || this.colo,
     }
 
-    // Build locations map (city name -> URL)
-    const locations = Object.entries(colos).reduce(
-      (acc, [code, name]) => ({
-        ...acc,
-        [name]: `https://${code}.colo.do${pathname}${search}`,
-      }),
-      {} as Record<string, string>
-    )
+    // Build locations map organized by region
+    const locations = buildLocationsByRegion(pathname, search)
 
     return new Response(
       JSON.stringify({ api, error, colo: coloInfo, responseTime, status, locations, headers, data, user }, null, 2),
