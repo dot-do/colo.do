@@ -21,6 +21,7 @@ import {
   estimateLatency,
   getDistance,
 } from './location.js'
+import { createDORegistry, type DORegistry } from './do-registry.js'
 
 // Re-export DOs for wrangler bindings
 export { DORegistryDO } from './do-registry.js'
@@ -252,13 +253,25 @@ export default {
           city: c.city,
         }))
 
-        // Get DO stub and measure latency
-        const targetColo = colo?.toUpperCase() || workerColo
-        const stub = COLO.get(COLO.idFromName(targetColo))
+        // Use the Worker's colo as the target - this ensures DOs are created locally
+        // When you hit cdg.colo.do and the Worker runs in CDG, we want a DO in CDG
+        const targetColo = workerColo
+
+        // Create registry to use newUniqueId() instead of idFromName()
+        // This creates DOs in the CURRENT Worker's colo, not a deterministic global location
+        const registry = createDORegistry(COLO, {
+          indexDO: env.DO_REGISTRY,
+        })
+
+        // Get or create stub - newUniqueId() places DO in current Worker's colo
         const start = Date.now()
         let doColo = targetColo
         let workerLatencyToDurable = 0
+        let registryTier: string = 'unknown'
         try {
+          const result = await registry.getStubWithResult(targetColo, undefined, { request: req })
+          registryTier = result.tier
+          const stub = result.stub
           doColo = await stub.fetch('https://colo.do').then(res => res.text())
           workerLatencyToDurable = Date.now() - start
         } catch {
@@ -301,10 +314,11 @@ export default {
 
       const responseData = {
         // Colo discovery info
-        requestedColo: targetColo,
+        workerColo,
         actualColo: doColo,
         coloMatch,
         canHostDO,
+        registryTier, // l1-cache, l2-index, or l3-created (newUniqueId)
         // Latency measurements
         visitorLatencyToWorker,
         workerLatencyToDurable,
@@ -315,16 +329,16 @@ export default {
         // Location details
         visitor,
         workerLocation,
-        requestedLocation,
         durableLocation,
       }
 
       return new Response(JSON.stringify(responseData, null, 2), {
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'x-requested-colo': targetColo,
+          'x-worker-colo': workerColo,
           'x-actual-colo': sanitizedDoColo,
           'x-colo-match': String(coloMatch),
+          'x-registry-tier': registryTier,
           'x-do-latency': String(workerLatencyToDurable || 0),
           'x-visitor-latency': String(visitorLatencyToWorker ?? 0),
         },
@@ -357,6 +371,83 @@ export default {
       })
     }
 
+    // Discovery endpoint - creates a NEW DO with newUniqueId() to test if this colo can host DOs
+    // This is the WDOL approach: fresh DO every time, register if colo matches
+    if (pathname === '/discover' || pathname === '/discover/') {
+      const workerColo = cf?.colo || 'UNKNOWN'
+
+      // Create a NEW DO with newUniqueId() - this places it in the current Worker's colo
+      const newId = COLO.newUniqueId()
+      const stub = COLO.get(newId)
+
+      const start = Date.now()
+      let actualColo = 'UNKNOWN'
+      try {
+        actualColo = await stub.fetch('https://colo.do').then(res => res.text())
+      } catch (e) {
+        return new Response(JSON.stringify({
+          error: 'Failed to reach DO',
+          workerColo,
+          message: e instanceof Error ? e.message : 'Unknown error',
+        }, null, 2), {
+          status: 500,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        })
+      }
+      const latencyMs = Date.now() - start
+
+      const canHostDO = workerColo === actualColo
+      let registered = false
+
+      // If this colo can host DOs, register it
+      if (canHostDO && env.DO_REGISTRY) {
+        try {
+          const registryId = env.DO_REGISTRY.idFromName('index')
+          const registry = env.DO_REGISTRY.get(registryId)
+
+          await registry.fetch('https://internal/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              namespace: 'COLO',
+              name: workerColo,
+              id: newId.toString(),
+              colo: workerColo,
+              createdAt: Date.now(),
+              lastAccessedAt: Date.now(),
+              metadata: {
+                city: colos[workerColo.toLowerCase()] || workerColo,
+                canHostDO: true,
+                discoveredAt: new Date().toISOString(),
+                discoveryMethod: 'newUniqueId',
+              },
+            }),
+          })
+          registered = true
+          console.log(`[COLO DISCOVERED] ${workerColo} can host Durable Objects`)
+        } catch (e) {
+          console.error('[COLO REGISTRY ERROR]', e instanceof Error ? e.message : e)
+        }
+      }
+
+      return new Response(JSON.stringify({
+        workerColo,
+        actualColo,
+        canHostDO,
+        registered,
+        latencyMs,
+        doId: newId.toString(),
+        city: colos[workerColo.toLowerCase()] || workerColo,
+      }, null, 2), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'x-worker-colo': workerColo,
+          'x-actual-colo': actualColo,
+          'x-can-host-do': String(canHostDO),
+        },
+      })
+    }
+
     // Registry API
     if (pathname.startsWith('/registry') && env.DO_REGISTRY) {
       const registryId = env.DO_REGISTRY.idFromName('index')
@@ -378,19 +469,19 @@ export default {
     }
 
     // Proxy all other requests through the colo DO
-    // Pass the requested colo via header for auto-discovery
-    const targetColo = colo?.toUpperCase()
-    if (targetColo) {
-      const doReq = new Request(req.url, req)
-      doReq.headers.set('X-Requested-Colo', targetColo)
-      return COLO.get(COLO.idFromName(targetColo)).fetch(doReq)
-    }
-
-    // No colo specified - use worker's colo
+    // Use Worker's colo and registry with newUniqueId() to create DOs locally
     const workerColo = cf?.colo || 'ORD'
+
+    // Create registry - uses newUniqueId() which places DOs in current Worker's colo
+    const registry = createDORegistry(COLO, {
+      indexDO: env.DO_REGISTRY,
+    })
+
+    // Get or create stub for this Worker's colo
+    const stub = await registry.getStub(workerColo, undefined, { request: req })
     const doReq = new Request(req.url, req)
     doReq.headers.set('X-Requested-Colo', workerColo)
-    return COLO.get(COLO.idFromName(workerColo)).fetch(doReq)
+    return stub.fetch(doReq)
   },
 }
 
