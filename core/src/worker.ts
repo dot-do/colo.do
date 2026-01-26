@@ -78,6 +78,22 @@ export default {
         }, corsHeaders)
       }
 
+      // Seed endpoint - warm up cluster DO in this colo
+      // Use with https://tools.bunny.net/http-test?query=https://colo.do/api/seed
+      if (path === '/api/seed') {
+        const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
+        const currentColo = cf?.colo
+
+        return json({
+          seeded: true,
+          colo: currentColo,
+          timestamp: Date.now(),
+          message: currentColo
+            ? `Cluster DO seeded in ${currentColo}`
+            : 'Request from unknown colo',
+        }, corsHeaders)
+      }
+
       if (path === '/api/colos' || path === '/api/colos/') {
         const region = url.searchParams.get('region')
         const doOnly = url.searchParams.get('do') === 'true'
@@ -187,10 +203,11 @@ export default {
         const doId = env.COLO_DO.idFromName(doName)
         const stub = env.COLO_DO.get(doId)
 
-        // Forward request with colo info header
+        // Forward request with colo info headers + timestamp for RTT measurement
         const headers = new Headers(request.headers)
         headers.set('X-Worker-Colo', location.colo)
         headers.set('X-Target-Colo', targetColo)
+        headers.set('X-Request-Timestamp', Date.now().toString())
 
         const forwardUrl = new URL(request.url)
         forwardUrl.pathname = '/' + remainder
@@ -298,29 +315,64 @@ const nearest = findNearestColo(request, ['IAD', 'ORD', 'SFO'])</pre>
 
 /**
  * Simple Colo DO for testing colo placement
+ *
+ * Note: DOs don't have direct access to their own colo location.
+ * The cf.colo on the request shows where the request originated,
+ * not where the DO is running.
+ *
+ * To verify placement, measure round-trip latency - DOs closer
+ * to the request origin will have lower latency.
  */
 export class ColoDO implements DurableObject {
   private state: DurableObjectState
+  private initTime: number
 
   constructor(state: DurableObjectState) {
     this.state = state
+    this.initTime = Date.now()
   }
 
   async fetch(request: Request): Promise<Response> {
+    const startTime = Date.now()
     const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
-    const doColo = cf?.colo ?? 'UNKNOWN'
+
+    // Read from storage to ensure DO is fully initialized
+    await this.state.storage.get('_ping')
+
+    const processingTime = Date.now() - startTime
     const workerColo = request.headers.get('X-Worker-Colo')
     const targetColo = request.headers.get('X-Target-Colo')
+    const requestTimestamp = request.headers.get('X-Request-Timestamp')
+
+    // Calculate round-trip time if timestamp was sent
+    const roundTripMs = requestTimestamp
+      ? Date.now() - parseInt(requestTimestamp, 10)
+      : undefined
 
     return new Response(JSON.stringify({
-      doColo,
+      // DO info
+      doId: this.state.id.toString(),
+      doName: this.state.id.name ?? null,
+      initTime: this.initTime,
+
+      // Request info
+      requestColo: cf?.colo ?? 'UNKNOWN',
       workerColo,
       targetColo,
-      coloInfo: getColo(doColo),
-      distance: workerColo ? coloDistance(workerColo, doColo) : undefined,
-      latency: workerColo ? estimateLatency(workerColo, doColo) : undefined,
+      targetColoInfo: targetColo ? getColo(targetColo) : undefined,
+
+      // Timing (helps verify placement - lower = closer)
+      processingMs: processingTime,
+      roundTripMs,
+
+      // Distance calculations (if worker colo is known)
+      distance: workerColo && targetColo ? coloDistance(workerColo, targetColo) : undefined,
+      estimatedLatency: workerColo && targetColo ? estimateLatency(workerColo, targetColo) : undefined,
     }, null, 2), {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-DO-Processing-Ms': processingTime.toString(),
+      },
     })
   }
 }

@@ -155,3 +155,25 @@ export {
   type DORegistryEnv,
   type DORegistryGetOptions,
 } from './do-registry.js'
+
+// Colo Cluster - Simple DO creation API + mesh across all 278 DO-capable colos
+export {
+  // Simple API (recommended)
+  createDO,
+  getDO,
+  // Cluster factory
+  createColoCluster,
+  // Data
+  DO_CAPABLE_COLOS,
+  isDOCapable,
+  fetchWDOLData,
+  parseWDOLData,
+  seedCluster,
+  // Types
+  type CreateDOOptions,
+  type CreateDOResult,
+  type DOColo,
+  type DOCapableColo,
+  type ColoCluster,
+  type ClusterStatus,
+} from './colo-cluster.js'
