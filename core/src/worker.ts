@@ -406,7 +406,6 @@ export default {
 export class Colo {
   private colo: string = 'UNKNOWN'
   private env: Env
-  private registered: boolean = false
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
@@ -425,20 +424,18 @@ export class Colo {
    * This is how we auto-discover DO-capable colos.
    *
    * IMPORTANT: This is fire-and-forget, never blocks the main request.
-   * Uses state.waitUntil() to run in background.
+   * Always tries to register - registry handles upserts gracefully.
    */
   private maybeRegister(requestedColo: string): void {
-    // Skip if already registered or no registry binding
-    if (this.registered || !this.env.DO_REGISTRY) return
+    // Skip if no registry binding
+    if (!this.env.DO_REGISTRY) return
 
     // Only register if this DO is running in the requested colo
     // (This proves this colo can host DOs)
     if (this.colo !== requestedColo) return
 
-    // Mark as registered immediately to prevent duplicate registrations
-    this.registered = true
-
     // Fire and forget - use DO's waitUntil to run in background
+    // Always try to register - registry upsert handles duplicates
     this.state.waitUntil((async () => {
       try {
         const registryId = this.env.DO_REGISTRY!.idFromName('index')
@@ -463,8 +460,6 @@ export class Colo {
         })
         console.log(`[COLO DISCOVERED] ${this.colo} can host Durable Objects`)
       } catch (e) {
-        // Registration failed - reset flag to retry later
-        this.registered = false
         console.error('[COLO REGISTRY ERROR]', e instanceof Error ? e.message : e)
       }
     })())
