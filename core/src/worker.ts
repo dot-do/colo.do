@@ -86,11 +86,11 @@ export default {
           const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
           const baseUrl = getBaseUrl(hostname)
 
-          // Build colo switching links
+          // Build colo switching links for all DO-capable colos
           const coloLinks: Record<string, string> = {}
-          const majorColos = ['IAD', 'ORD', 'LAX', 'SFO', 'SEA', 'LHR', 'AMS', 'FRA', 'NRT', 'SIN', 'SYD']
-          for (const colo of majorColos) {
-            coloLinks[colo.toLowerCase()] = buildColoUrl(baseUrl, colo, hostname)
+          const doColos = getDOColos()
+          for (const coloInfo of doColos) {
+            coloLinks[coloInfo.iata.toLowerCase()] = buildColoUrl(baseUrl, coloInfo.iata, hostname)
           }
 
           return json({
@@ -159,9 +159,9 @@ export default {
         // Build colo switching links
         const baseUrl = getBaseUrl(hostname)
         const coloLinks: Record<string, string> = {}
-        const majorColos = ['IAD', 'ORD', 'LAX', 'SFO', 'SEA', 'LHR', 'AMS', 'FRA', 'NRT', 'SIN', 'SYD']
-        for (const colo of majorColos) {
-          coloLinks[colo.toLowerCase()] = buildColoUrl(baseUrl, colo, hostname)
+        const doColos = getDOColos()
+        for (const coloInfo of doColos) {
+          coloLinks[coloInfo.iata.toLowerCase()] = buildColoUrl(baseUrl, coloInfo.iata, hostname)
         }
 
         return json({
