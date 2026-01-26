@@ -16,6 +16,9 @@ import {
   type FastRegistryEntry,
   type FastRegistryConfig,
   type FastRegistryStats,
+  type FastRegistry,
+  // Factory function
+  createFastRegistry,
   // L1 Cache helpers
   getCache,
   buildCacheKey,
@@ -1014,6 +1017,520 @@ describe('FastRegistryDO (L2 Index)', () => {
     it('should return 404 for wrong HTTP methods', async () => {
       const response = await registryDO.fetch(new Request('https://internal/register', { method: 'GET' }))
       expect(response.status).toBe(404)
+    })
+  })
+})
+
+// ============================================================================
+// createFastRegistry Tests
+// ============================================================================
+
+/**
+ * Mock DurableObjectNamespace for testing
+ */
+function createMockNamespace() {
+  const stubs = new Map<string, { id: DurableObjectId; stub: DurableObjectStub }>()
+  let uniqueIdCounter = 0
+
+  const createMockId = (hexId: string): DurableObjectId => ({
+    toString: () => hexId,
+    equals: (other: DurableObjectId) => other.toString() === hexId,
+    name: undefined,
+  })
+
+  const createMockStub = (id: DurableObjectId): DurableObjectStub => ({
+    id,
+    fetch: vi.fn().mockResolvedValue(new Response('OK')),
+    connect: vi.fn(),
+    name: undefined,
+  }) as unknown as DurableObjectStub
+
+  return {
+    idFromName: vi.fn((name: string) => {
+      const hexId = `name-based-${name}-${Date.now()}`
+      return createMockId(hexId)
+    }),
+    idFromString: vi.fn((hexId: string) => createMockId(hexId)),
+    newUniqueId: vi.fn(() => {
+      const hexId = `unique-${++uniqueIdCounter}-${Date.now()}`
+      return createMockId(hexId)
+    }),
+    get: vi.fn((id: DurableObjectId) => {
+      const hexId = id.toString()
+      if (!stubs.has(hexId)) {
+        stubs.set(hexId, { id, stub: createMockStub(id) })
+      }
+      return stubs.get(hexId)!.stub
+    }),
+    jurisdiction: vi.fn(),
+  } as unknown as DurableObjectNamespace
+}
+
+/**
+ * Create mock L2 Index DO namespace
+ */
+function createMockIndexDONamespace(
+  registryDO: FastRegistryDO
+): DurableObjectNamespace {
+  const mockStub: DurableObjectStub = {
+    id: { toString: () => 'index', equals: () => false, name: 'index' } as DurableObjectId,
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      return registryDO.fetch(request)
+    },
+    connect: vi.fn(),
+    name: 'index',
+  } as unknown as DurableObjectStub
+
+  return {
+    idFromName: vi.fn(() => ({
+      toString: () => 'index',
+      equals: () => false,
+      name: 'index',
+    })),
+    idFromString: vi.fn(),
+    newUniqueId: vi.fn(),
+    get: vi.fn(() => mockStub),
+    jurisdiction: vi.fn(),
+  } as unknown as DurableObjectNamespace
+}
+
+describe('createFastRegistry', () => {
+  let targetNamespace: DurableObjectNamespace
+  let indexDOState: DurableObjectState
+  let indexDO: FastRegistryDO
+  let indexDONamespace: DurableObjectNamespace
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockCache.match.mockReset()
+    mockCache.put.mockReset()
+    mockCache.delete.mockReset()
+
+    targetNamespace = createMockNamespace()
+    indexDOState = createMockState()
+    indexDO = new FastRegistryDO(indexDOState)
+    indexDONamespace = createMockIndexDONamespace(indexDO)
+  })
+
+  describe('getStub', () => {
+    it('should return stub from L1 cache', async () => {
+      // Pre-populate L1 cache
+      const cachedEntry: FastRegistryEntry = {
+        name: 'cached-do',
+        hexId: 'cached-hex-id-123',
+        namespace: 'default',
+        locationHint: 'enam',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      mockCache.match.mockResolvedValue(
+        new Response(JSON.stringify(cachedEntry), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'max-age=30',
+            Age: '5',
+          },
+        })
+      )
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const stub = await registry.getStub('cached-do')
+
+      expect(stub).toBeDefined()
+      expect(targetNamespace.idFromString).toHaveBeenCalledWith('cached-hex-id-123')
+      expect(targetNamespace.newUniqueId).not.toHaveBeenCalled()
+
+      const stats = registry.getStats()
+      expect(stats.l1CacheHits).toBe(1)
+      expect(stats.l2IndexHits).toBe(0)
+      expect(stats.l3CreationFallbacks).toBe(0)
+    })
+
+    it('should fall back to L2 on cache miss', async () => {
+      // L1 cache miss
+      mockCache.match.mockResolvedValue(undefined)
+
+      // Pre-populate L2 index
+      const indexedEntry: FastRegistryEntry = {
+        name: 'indexed-do',
+        hexId: 'indexed-hex-id-456',
+        namespace: 'default',
+        locationHint: 'weur',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      await indexDO.fetch(
+        new Request('https://internal/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(indexedEntry),
+        })
+      )
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const ctx = createMockContext()
+      const stub = await registry.getStub('indexed-do', ctx)
+
+      expect(stub).toBeDefined()
+      expect(targetNamespace.idFromString).toHaveBeenCalledWith('indexed-hex-id-456')
+      expect(targetNamespace.newUniqueId).not.toHaveBeenCalled()
+
+      const stats = registry.getStats()
+      expect(stats.l1CacheHits).toBe(0)
+      expect(stats.l2IndexHits).toBe(1)
+      expect(stats.l3CreationFallbacks).toBe(0)
+
+      // Should have cached the entry in L1
+      expect(ctx.waitUntil).toHaveBeenCalled()
+    })
+
+    it('should create new DO on L2 miss', async () => {
+      // L1 cache miss
+      mockCache.match.mockResolvedValue(undefined)
+
+      // L2 index is empty (no pre-population)
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const ctx = createMockContext()
+      const stub = await registry.getStub('new-do', ctx)
+
+      expect(stub).toBeDefined()
+      expect(targetNamespace.newUniqueId).toHaveBeenCalled()
+
+      const stats = registry.getStats()
+      expect(stats.l1CacheHits).toBe(0)
+      expect(stats.l2IndexHits).toBe(0)
+      expect(stats.l3CreationFallbacks).toBe(1)
+
+      // Should have triggered background registration
+      expect(ctx.waitUntil).toHaveBeenCalled()
+    })
+
+    it('should work without L2 index DO', async () => {
+      // L1 cache miss
+      mockCache.match.mockResolvedValue(undefined)
+
+      // No L2 index DO configured
+      const registry = createFastRegistry(targetNamespace)
+
+      const stub = await registry.getStub('no-l2-do')
+
+      expect(stub).toBeDefined()
+      expect(targetNamespace.newUniqueId).toHaveBeenCalled()
+
+      const stats = registry.getStats()
+      expect(stats.l3CreationFallbacks).toBe(1)
+    })
+  })
+
+  describe('getStubWithResult', () => {
+    it('should return tier information for L1 hit', async () => {
+      const cachedEntry: FastRegistryEntry = {
+        name: 'l1-hit',
+        hexId: 'l1-hex-id',
+        namespace: 'default',
+        locationHint: 'enam',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      mockCache.match.mockResolvedValue(
+        new Response(JSON.stringify(cachedEntry), {
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'max-age=30',
+            Age: '5',
+          },
+        })
+      )
+
+      const registry = createFastRegistry(targetNamespace)
+
+      const result = await registry.getStubWithResult('l1-hit')
+
+      expect(result.tier).toBe('l1-cache')
+      expect(result.entry.hexId).toBe('l1-hex-id')
+      expect(result.stub).toBeDefined()
+      expect(result.latencyMs).toBeGreaterThanOrEqual(0)
+    })
+
+    it('should return tier information for L2 hit', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const indexedEntry: FastRegistryEntry = {
+        name: 'l2-hit',
+        hexId: 'l2-hex-id',
+        namespace: 'default',
+        locationHint: 'apac',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      await indexDO.fetch(
+        new Request('https://internal/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(indexedEntry),
+        })
+      )
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const result = await registry.getStubWithResult('l2-hit')
+
+      expect(result.tier).toBe('l2-index')
+      expect(result.entry.hexId).toBe('l2-hex-id')
+      expect(result.stub).toBeDefined()
+    })
+
+    it('should return tier information for L3 creation', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const result = await registry.getStubWithResult('l3-create')
+
+      expect(result.tier).toBe('l3-created')
+      expect(result.entry.name).toBe('l3-create')
+      expect(result.entry.hexId).toContain('unique-')
+      expect(result.stub).toBeDefined()
+    })
+  })
+
+  describe('register', () => {
+    it('should register entry in L1 cache', async () => {
+      const registry = createFastRegistry(targetNamespace)
+
+      const entry: FastRegistryEntry = {
+        name: 'register-test',
+        hexId: 'register-hex-id',
+        namespace: 'default',
+        locationHint: 'enam',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      await registry.register(entry)
+
+      expect(mockCache.put).toHaveBeenCalled()
+      const stats = registry.getStats()
+      expect(stats.registrations).toBe(1)
+    })
+
+    it('should register entry in L2 index', async () => {
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const entry: FastRegistryEntry = {
+        name: 'register-l2-test',
+        hexId: 'register-l2-hex-id',
+        namespace: 'default',
+        locationHint: 'weur',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      await registry.register(entry)
+
+      // Verify L2 was updated by looking it up
+      const lookupResponse = await indexDO.fetch(
+        new Request('https://internal/lookup/default/register-l2-test')
+      )
+      expect(lookupResponse.status).toBe(200)
+      const result = await lookupResponse.json<FastRegistryEntry>()
+      expect(result.hexId).toBe('register-l2-hex-id')
+    })
+
+    it('should register new DO in background after L3 creation', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      const ctx = createMockContext()
+      await registry.getStub('background-register', ctx)
+
+      // waitUntil should have been called with the registration promise
+      expect(ctx.waitUntil).toHaveBeenCalled()
+
+      // Wait a tick for the registration to complete
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      // Verify entry was registered in L2
+      const lookupResponse = await indexDO.fetch(
+        new Request('https://internal/lookup/default/background-register')
+      )
+      expect(lookupResponse.status).toBe(200)
+    })
+  })
+
+  describe('invalidate', () => {
+    it('should invalidate L1 cache entry', async () => {
+      const registry = createFastRegistry(targetNamespace)
+
+      await registry.invalidate('invalidate-test')
+
+      expect(mockCache.delete).toHaveBeenCalledWith(
+        expect.stringContaining('fast/default/invalidate-test')
+      )
+    })
+  })
+
+  describe('getStats', () => {
+    it('should track stats correctly', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const registry = createFastRegistry(targetNamespace)
+
+      // Initial stats
+      let stats = registry.getStats()
+      expect(stats.l1CacheHits).toBe(0)
+      expect(stats.l2IndexHits).toBe(0)
+      expect(stats.l3CreationFallbacks).toBe(0)
+      expect(stats.registrations).toBe(0)
+      expect(stats.hitRate).toBe(0)
+
+      // Make some lookups (all will be L3 since no L2 configured)
+      await registry.getStub('do-1')
+      await registry.getStub('do-2')
+      await registry.getStub('do-3')
+
+      stats = registry.getStats()
+      expect(stats.l3CreationFallbacks).toBe(3)
+      expect(stats.registrations).toBe(3)
+      expect(stats.hitRate).toBe(0) // All misses
+    })
+
+    it('should calculate hit rate correctly', async () => {
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: indexDONamespace,
+      })
+
+      // Set up L1 cache hits - use mockImplementation to return fresh Response each time
+      const cachedEntry: FastRegistryEntry = {
+        name: 'cached',
+        hexId: 'cached-hex',
+        namespace: 'default',
+        locationHint: 'enam',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }
+
+      mockCache.match.mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify(cachedEntry), {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'max-age=30',
+              Age: '5',
+            },
+          })
+        )
+      )
+
+      // 3 L1 cache hits
+      await registry.getStub('cached')
+      await registry.getStub('cached')
+      await registry.getStub('cached')
+
+      // Now cause an L3 miss
+      mockCache.match.mockResolvedValue(undefined)
+      await registry.getStub('new-do')
+
+      const stats = registry.getStats()
+      expect(stats.l1CacheHits).toBe(3)
+      expect(stats.l3CreationFallbacks).toBe(1)
+      // Hit rate = (3 + 0) / (3 + 0 + 1) = 0.75
+      expect(stats.hitRate).toBe(0.75)
+    })
+
+    it('should return a copy of stats (not reference)', async () => {
+      const registry = createFastRegistry(targetNamespace)
+
+      const stats1 = registry.getStats()
+      stats1.l1CacheHits = 999
+
+      const stats2 = registry.getStats()
+      expect(stats2.l1CacheHits).toBe(0)
+    })
+  })
+
+  describe('edge cases', () => {
+    it('should handle L2 errors gracefully', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      // Create a namespace that throws errors
+      const errorIndexDONamespace = {
+        idFromName: vi.fn(() => ({
+          toString: () => 'index',
+          equals: () => false,
+          name: 'index',
+        })),
+        get: vi.fn(() => ({
+          fetch: vi.fn().mockRejectedValue(new Error('L2 unavailable')),
+        })),
+      } as unknown as DurableObjectNamespace
+
+      const registry = createFastRegistry(targetNamespace, {
+        indexDO: errorIndexDONamespace,
+      })
+
+      // Should still work by falling back to L3
+      const stub = await registry.getStub('error-fallback')
+      expect(stub).toBeDefined()
+
+      const stats = registry.getStats()
+      expect(stats.l3CreationFallbacks).toBe(1)
+    })
+
+    it('should handle concurrent lookups for the same name', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const registry = createFastRegistry(targetNamespace)
+
+      // Fire multiple concurrent lookups
+      const results = await Promise.all([
+        registry.getStubWithResult('concurrent'),
+        registry.getStubWithResult('concurrent'),
+        registry.getStubWithResult('concurrent'),
+      ])
+
+      // All should succeed (though each might create new IDs since there's no dedup)
+      results.forEach((result) => {
+        expect(result.stub).toBeDefined()
+        expect(result.tier).toBe('l3-created')
+      })
+
+      const stats = registry.getStats()
+      expect(stats.l3CreationFallbacks).toBe(3)
+    })
+
+    it('should work without ExecutionContext', async () => {
+      mockCache.match.mockResolvedValue(undefined)
+
+      const registry = createFastRegistry(targetNamespace)
+
+      // No ctx passed - should still work (fire and forget registration)
+      const stub = await registry.getStub('no-ctx')
+      expect(stub).toBeDefined()
     })
   })
 })

@@ -345,6 +345,308 @@ export async function invalidateFastRegistryCache(
  * export { FastRegistryDO } from 'colo.do'
  * ```
  */
+/**
+ * FastRegistry interface - the main API returned by createFastRegistry
+ *
+ * Provides 31x faster DO lookups using idFromString() (~5ms) instead of
+ * idFromName() (~157ms) through L1 Cache, L2 Index DO, and L3 fallback layers.
+ */
+export interface FastRegistry {
+  /**
+   * Get a DO stub by name using the L1→L2→L3 lookup chain.
+   *
+   * - L1 hit: Returns cached entry, uses idFromString(hexId) (~1-5ms)
+   * - L2 hit: Returns indexed entry, caches it, uses idFromString(hexId) (~5-20ms)
+   * - L3 fallback: Creates new DO with newUniqueId(), registers in background (~50-100ms)
+   *
+   * @param name - Logical name for the DO instance
+   * @param ctx - Optional ExecutionContext for background registration
+   * @returns The DurableObjectStub ready for .fetch() calls
+   */
+  getStub(name: string, ctx?: ExecutionContext): Promise<DurableObjectStub>
+
+  /**
+   * Get a DO stub with detailed result information.
+   *
+   * Same as getStub but returns additional metadata about which tier
+   * served the request and how long it took.
+   *
+   * @param name - Logical name for the DO instance
+   * @param ctx - Optional ExecutionContext for background registration
+   * @returns Object containing stub, entry, tier, and latency
+   */
+  getStubWithResult(
+    name: string,
+    ctx?: ExecutionContext
+  ): Promise<{
+    stub: DurableObjectStub
+    entry: FastRegistryEntry
+    tier: 'l1-cache' | 'l2-index' | 'l3-created'
+    latencyMs: number
+  }>
+
+  /**
+   * Register a new entry in both L1 cache and L2 index.
+   *
+   * Call this after creating a new DO via L3 (newUniqueId) to ensure
+   * future lookups can use the fast path.
+   *
+   * @param entry - The entry to register
+   */
+  register(entry: FastRegistryEntry): Promise<void>
+
+  /**
+   * Invalidate a cached entry.
+   *
+   * Call this when a DO is deleted or needs to be refreshed.
+   * Invalidates both L1 cache and optionally L2 index.
+   *
+   * @param name - The name to invalidate
+   */
+  invalidate(name: string): Promise<void>
+
+  /**
+   * Get current statistics for this FastRegistry instance.
+   *
+   * @returns Statistics including hit rates for each tier
+   */
+  getStats(): FastRegistryStats
+}
+
+/**
+ * Create a FastRegistry instance for fast DO lookups.
+ *
+ * FastRegistry provides 31x faster lookups by storing hex IDs and using
+ * idFromString() (~5ms) instead of idFromName() (~157ms).
+ *
+ * @param targetNamespace - The DurableObjectNamespace to create stubs from
+ * @param config - Configuration including optional L2 Index DO namespace
+ * @returns A FastRegistry instance with getStub, register, invalidate, and getStats methods
+ *
+ * @example
+ * ```typescript
+ * import { createFastRegistry, FastRegistryDO } from 'colo.do'
+ *
+ * // Export the DO for L2 storage
+ * export { FastRegistryDO }
+ *
+ * export default {
+ *   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+ *     const registry = createFastRegistry(env.MY_DO, {
+ *       indexDO: env.FAST_REGISTRY_DO,
+ *     })
+ *
+ *     // Fast lookup (~5ms vs ~157ms)
+ *     const stub = await registry.getStub('user-123', ctx)
+ *     return stub.fetch(request)
+ *   }
+ * }
+ * ```
+ */
+export function createFastRegistry(
+  targetNamespace: DurableObjectNamespace,
+  config?: FastRegistryConfig & {
+    /** Optional L2 Index DO namespace for persistent storage */
+    indexDO?: DurableObjectNamespace
+  }
+): FastRegistry {
+  const mergedConfig = { ...DEFAULT_FAST_REGISTRY_CONFIG, ...config }
+  const indexDO = config?.indexDO
+
+  // Internal stats tracking
+  const stats: FastRegistryStats = {
+    l1CacheHits: 0,
+    l2IndexHits: 0,
+    l3CreationFallbacks: 0,
+    registrations: 0,
+    pendingRevalidations: 0,
+    hitRate: 0,
+  }
+
+  // Calculate hit rate from current stats
+  const calculateHitRate = (): number => {
+    const total = stats.l1CacheHits + stats.l2IndexHits + stats.l3CreationFallbacks
+    if (total === 0) return 0
+    return (stats.l1CacheHits + stats.l2IndexHits) / total
+  }
+
+  // Get the namespace name for cache keys (extracted from the namespace binding)
+  // In a real environment, this would be determined by configuration
+  const namespace = 'default'
+
+  /**
+   * Lookup entry from L2 Index DO
+   */
+  async function lookupFromL2(name: string): Promise<FastRegistryEntry | null> {
+    if (!indexDO) return null
+
+    try {
+      // Use a consistent ID for the index DO (singleton per region)
+      const indexId = indexDO.idFromName('index')
+      const indexStub = indexDO.get(indexId)
+
+      const response = await indexStub.fetch(
+        `https://internal/lookup/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+      )
+
+      if (response.status === 404) {
+        return null
+      }
+
+      if (!response.ok) {
+        return null
+      }
+
+      return response.json<FastRegistryEntry>()
+    } catch {
+      // L2 errors should not block - fall back to L3
+      return null
+    }
+  }
+
+  /**
+   * Register entry in L2 Index DO
+   */
+  async function registerInL2(entry: FastRegistryEntry): Promise<void> {
+    if (!indexDO) return
+
+    try {
+      const indexId = indexDO.idFromName('index')
+      const indexStub = indexDO.get(indexId)
+
+      await indexStub.fetch('https://internal/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+      })
+    } catch {
+      // L2 registration errors are non-fatal
+    }
+  }
+
+  /**
+   * Create a new DO via L3 (newUniqueId)
+   */
+  function createViaL3(name: string): { id: DurableObjectId; entry: FastRegistryEntry } {
+    const id = targetNamespace.newUniqueId()
+    const now = Date.now()
+
+    const entry: FastRegistryEntry = {
+      name,
+      hexId: id.toString(),
+      namespace,
+      locationHint: 'enam', // Default location hint, can be overridden
+      createdAt: now,
+      lastAccessedAt: now,
+    }
+
+    return { id, entry }
+  }
+
+  return {
+    async getStub(name: string, ctx?: ExecutionContext): Promise<DurableObjectStub> {
+      const result = await this.getStubWithResult(name, ctx)
+      return result.stub
+    },
+
+    async getStubWithResult(
+      name: string,
+      ctx?: ExecutionContext
+    ): Promise<{
+      stub: DurableObjectStub
+      entry: FastRegistryEntry
+      tier: 'l1-cache' | 'l2-index' | 'l3-created'
+      latencyMs: number
+    }> {
+      const startTime = Date.now()
+
+      // L1: Check cache first (FREE, ~1-5ms)
+      const cachedEntry = await lookupFromCache(mergedConfig, namespace, name, ctx)
+      if (cachedEntry) {
+        stats.l1CacheHits++
+        stats.hitRate = calculateHitRate()
+
+        const id = targetNamespace.idFromString(cachedEntry.hexId)
+        const stub = targetNamespace.get(id)
+
+        return {
+          stub,
+          entry: cachedEntry,
+          tier: 'l1-cache',
+          latencyMs: Date.now() - startTime,
+        }
+      }
+
+      // L2: Check index DO (~5-20ms)
+      const indexedEntry = await lookupFromL2(name)
+      if (indexedEntry) {
+        stats.l2IndexHits++
+        stats.hitRate = calculateHitRate()
+
+        // Cache the entry in L1 for next time
+        if (ctx) {
+          ctx.waitUntil(cacheEntry(mergedConfig, indexedEntry))
+        } else {
+          // Fire and forget if no ctx
+          cacheEntry(mergedConfig, indexedEntry).catch(() => {})
+        }
+
+        const id = targetNamespace.idFromString(indexedEntry.hexId)
+        const stub = targetNamespace.get(id)
+
+        return {
+          stub,
+          entry: indexedEntry,
+          tier: 'l2-index',
+          latencyMs: Date.now() - startTime,
+        }
+      }
+
+      // L3: Create new DO via newUniqueId (~50-100ms)
+      stats.l3CreationFallbacks++
+      stats.hitRate = calculateHitRate()
+
+      const { id, entry } = createViaL3(name)
+      const stub = targetNamespace.get(id)
+
+      // Register in background
+      const registerPromise = this.register(entry)
+      if (ctx) {
+        ctx.waitUntil(registerPromise)
+      } else {
+        // Fire and forget if no ctx
+        registerPromise.catch(() => {})
+      }
+
+      return {
+        stub,
+        entry,
+        tier: 'l3-created',
+        latencyMs: Date.now() - startTime,
+      }
+    },
+
+    async register(entry: FastRegistryEntry): Promise<void> {
+      stats.registrations++
+
+      // Register in both L1 and L2 in parallel
+      await Promise.all([cacheEntry(mergedConfig, entry), registerInL2(entry)])
+    },
+
+    async invalidate(name: string): Promise<void> {
+      // Invalidate L1 cache
+      await invalidateFastRegistryCache(mergedConfig, namespace, name)
+
+      // Note: L2 invalidation would require a delete endpoint in FastRegistryDO
+      // For now, entries will naturally be overwritten on next register
+    },
+
+    getStats(): FastRegistryStats {
+      return { ...stats }
+    },
+  }
+}
+
 export class FastRegistryDO implements DurableObject {
   private sql: DurableObjectStorage['sql']
   private initialized = false

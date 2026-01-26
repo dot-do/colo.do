@@ -135,6 +135,8 @@ export {
 
 // FastRegistry - 31x faster DO ID resolution
 export {
+  // Factory function
+  createFastRegistry,
   // L2 Index DO
   FastRegistryDO,
   // L1 Cache helpers
@@ -146,6 +148,7 @@ export {
   invalidateFastRegistryCache,
   DEFAULT_FAST_REGISTRY_CONFIG,
   // Types
+  type FastRegistry,
   type FastRegistryEntry,
   type FastRegistryConfig,
   type FastRegistryStats,
