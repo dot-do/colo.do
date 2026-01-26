@@ -1,8 +1,8 @@
 /**
- * FastRegistry - 31x Faster DO ID Resolution
+ * DORegistry - 31x Faster DO ID Resolution
  *
  * Standard idFromName() costs ~157ms (global coordination).
- * FastRegistry stores hex IDs and uses idFromString() for ~5ms (31x faster).
+ * DORegistry stores hex IDs and uses idFromString() for ~5ms (31x faster).
  *
  * ## Architecture
  *
@@ -39,14 +39,14 @@
  *
  * @example
  * ```typescript
- * import { createFastRegistry, FastRegistryDO } from 'colo.do'
+ * import { createDORegistry, DORegistryDO } from 'colo.do'
  *
  * // Export the DO
- * export { FastRegistryDO }
+ * export { DORegistryDO }
  *
  * export default {
  *   async fetch(request, env, ctx) {
- *     const registry = createFastRegistry(env)
+ *     const registry = createDORegistry(env)
  *
  *     // Fast lookup (~5ms vs ~157ms)
  *     const entry = await registry.lookup('MY_DO', 'user-123', ctx)
@@ -76,9 +76,9 @@
 // ============================================================================
 
 /**
- * Entry stored in FastRegistry for each DO instance
+ * Entry stored in DORegistry for each DO instance
  */
-export interface FastRegistryEntry {
+export interface DORegistryEntry {
   /** Logical name (user-provided identifier) */
   name: string
   /** DO ID hex string from id.toString() - used with idFromString() */
@@ -96,9 +96,9 @@ export interface FastRegistryEntry {
 }
 
 /**
- * Configuration for FastRegistry
+ * Configuration for DORegistry
  */
-export interface FastRegistryConfig {
+export interface DORegistryConfig {
   /** Cache TTL in seconds (default: 30) */
   cacheTtlSeconds?: number
   /** Stale TTL - how long to serve stale while revalidating (default: 300) */
@@ -110,9 +110,9 @@ export interface FastRegistryConfig {
 }
 
 /**
- * Statistics from FastRegistry operations
+ * Statistics from DORegistry operations
  */
-export interface FastRegistryStats {
+export interface DORegistryStats {
   /** Number of L1 cache hits (FREE, ~1-5ms) */
   l1CacheHits: number
   /** Number of L2 index DO hits (~2-3ms) */
@@ -128,9 +128,9 @@ export interface FastRegistryStats {
 }
 
 /**
- * Environment bindings required for FastRegistry
+ * Environment bindings required for DORegistry
  */
-export interface FastRegistryEnv {
+export interface DORegistryEnv {
   /** The fast registry durable object namespace */
   FAST_REGISTRY_DO?: DurableObjectNamespace
 }
@@ -140,14 +140,14 @@ export interface FastRegistryEnv {
 // ============================================================================
 
 /**
- * Default configuration values for FastRegistry.
+ * Default configuration values for DORegistry.
  *
  * These defaults are optimized for typical DO usage patterns:
  * - 30s fresh cache: Fast enough to catch most repeated lookups
  * - 300s stale TTL: Long enough to survive temporary L2 issues
  * - Access tracking: Enables LRU-style eviction in L2
  */
-export const DEFAULT_FAST_REGISTRY_CONFIG: Required<FastRegistryConfig> = {
+export const DEFAULT_FAST_REGISTRY_CONFIG: Required<DORegistryConfig> = {
   cacheTtlSeconds: 30,
   staleTtlSeconds: 300,
   cacheKeyPrefix: 'https://fast-registry.internal',
@@ -173,11 +173,11 @@ export function getCache(): Cache {
 }
 
 /**
- * Build a cache key URL for a FastRegistry entry.
+ * Build a cache key URL for a DORegistry entry.
  *
  * Format: `{prefix}/fast/{namespace}/{name}`
  *
- * The /fast/ path segment distinguishes FastRegistry keys from other
+ * The /fast/ path segment distinguishes DORegistry keys from other
  * cache entries that might use the same prefix.
  *
  * @param prefix - Cache key prefix URL (e.g., 'https://fast-registry.internal')
@@ -212,7 +212,7 @@ export function isCacheStale(response: Response): boolean {
 }
 
 /**
- * Store a FastRegistry entry in the L1 Cache.
+ * Store a DORegistry entry in the L1 Cache.
  *
  * Sets Cache-Control headers with max-age and stale-while-revalidate
  * for optimal SWR behavior:
@@ -220,12 +220,12 @@ export function isCacheStale(response: Response): boolean {
  * - `max-age`: How long the entry is considered fresh
  * - `stale-while-revalidate`: How long to serve stale while refreshing
  *
- * @param config - FastRegistry configuration
+ * @param config - DORegistry configuration
  * @param entry - The entry to cache
  */
 export async function cacheEntry(
-  config: FastRegistryConfig,
-  entry: FastRegistryEntry
+  config: DORegistryConfig,
+  entry: DORegistryEntry
 ): Promise<void> {
   const cache = getCache()
   const mergedConfig = { ...DEFAULT_FAST_REGISTRY_CONFIG, ...config }
@@ -242,7 +242,7 @@ export async function cacheEntry(
 }
 
 /**
- * Look up a FastRegistry entry from the L1 Cache.
+ * Look up a DORegistry entry from the L1 Cache.
  *
  * Returns the entry immediately if found (even if stale).
  * For stale entries with an ExecutionContext, background revalidation
@@ -250,18 +250,18 @@ export async function cacheEntry(
  *
  * This is the primary lookup path - it's FREE and globally distributed.
  *
- * @param config - FastRegistry configuration
+ * @param config - DORegistry configuration
  * @param namespace - DO class name
  * @param name - Logical instance name
  * @param ctx - Optional ExecutionContext for background revalidation
  * @returns The entry if found, null otherwise
  */
 export async function lookupFromCache(
-  config: FastRegistryConfig,
+  config: DORegistryConfig,
   namespace: string,
   name: string,
   ctx?: ExecutionContext
-): Promise<FastRegistryEntry | null> {
+): Promise<DORegistryEntry | null> {
   const cache = getCache()
   const mergedConfig = { ...DEFAULT_FAST_REGISTRY_CONFIG, ...config }
   const cacheKey = buildCacheKey(mergedConfig.cacheKeyPrefix, namespace, name)
@@ -273,7 +273,7 @@ export async function lookupFromCache(
       return null
     }
 
-    const entry = await response.json<FastRegistryEntry>()
+    const entry = await response.json<DORegistryEntry>()
 
     // Check if stale and should trigger background revalidation
     // Note: Actual revalidation from L2 will be added when factory is implemented
@@ -291,18 +291,18 @@ export async function lookupFromCache(
 }
 
 /**
- * Invalidate a FastRegistry entry from the L1 Cache.
+ * Invalidate a DORegistry entry from the L1 Cache.
  *
  * Call this when an entry is deleted, moved, or needs to be refreshed.
  * The entry will naturally expire via TTL, but explicit invalidation
  * ensures immediate consistency.
  *
- * @param config - FastRegistry configuration
+ * @param config - DORegistry configuration
  * @param namespace - DO class name
  * @param name - Logical instance name
  */
-export async function invalidateFastRegistryCache(
-  config: FastRegistryConfig,
+export async function invalidateDORegistryCache(
+  config: DORegistryConfig,
   namespace: string,
   name: string
 ): Promise<void> {
@@ -319,11 +319,11 @@ export async function invalidateFastRegistryCache(
 }
 
 // ============================================================================
-// FastRegistryDO - L2 Index DO Storage
+// DORegistryDO - L2 Index DO Storage
 // ============================================================================
 
 /**
- * FastRegistryDO - Durable Object for L2 storage
+ * DORegistryDO - Durable Object for L2 storage
  *
  * Stores name->hexId mappings in SQLite for fast regional lookups.
  * Used when L1 Cache misses.
@@ -339,19 +339,19 @@ export async function invalidateFastRegistryCache(
  * // In wrangler.toml:
  * [[durable_objects.bindings]]
  * name = "FAST_REGISTRY_DO"
- * class_name = "FastRegistryDO"
+ * class_name = "DORegistryDO"
  *
  * // Export from worker:
- * export { FastRegistryDO } from 'colo.do'
+ * export { DORegistryDO } from 'colo.do'
  * ```
  */
 /**
- * FastRegistry interface - the main API returned by createFastRegistry
+ * DORegistry interface - the main API returned by createDORegistry
  *
  * Provides 31x faster DO lookups using idFromString() (~5ms) instead of
  * idFromName() (~157ms) through L1 Cache, L2 Index DO, and L3 fallback layers.
  */
-export interface FastRegistry {
+export interface DORegistry {
   /**
    * Get a DO stub by name using the L1→L2→L3 lookup chain.
    *
@@ -380,7 +380,7 @@ export interface FastRegistry {
     ctx?: ExecutionContext
   ): Promise<{
     stub: DurableObjectStub
-    entry: FastRegistryEntry
+    entry: DORegistryEntry
     tier: 'l1-cache' | 'l2-index' | 'l3-created'
     latencyMs: number
   }>
@@ -393,7 +393,7 @@ export interface FastRegistry {
    *
    * @param entry - The entry to register
    */
-  register(entry: FastRegistryEntry): Promise<void>
+  register(entry: DORegistryEntry): Promise<void>
 
   /**
    * Invalidate a cached entry.
@@ -406,33 +406,33 @@ export interface FastRegistry {
   invalidate(name: string): Promise<void>
 
   /**
-   * Get current statistics for this FastRegistry instance.
+   * Get current statistics for this DORegistry instance.
    *
    * @returns Statistics including hit rates for each tier
    */
-  getStats(): FastRegistryStats
+  getStats(): DORegistryStats
 }
 
 /**
- * Create a FastRegistry instance for fast DO lookups.
+ * Create a DORegistry instance for fast DO lookups.
  *
- * FastRegistry provides 31x faster lookups by storing hex IDs and using
+ * DORegistry provides 31x faster lookups by storing hex IDs and using
  * idFromString() (~5ms) instead of idFromName() (~157ms).
  *
  * @param targetNamespace - The DurableObjectNamespace to create stubs from
  * @param config - Configuration including optional L2 Index DO namespace
- * @returns A FastRegistry instance with getStub, register, invalidate, and getStats methods
+ * @returns A DORegistry instance with getStub, register, invalidate, and getStats methods
  *
  * @example
  * ```typescript
- * import { createFastRegistry, FastRegistryDO } from 'colo.do'
+ * import { createDORegistry, DORegistryDO } from 'colo.do'
  *
  * // Export the DO for L2 storage
- * export { FastRegistryDO }
+ * export { DORegistryDO }
  *
  * export default {
  *   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
- *     const registry = createFastRegistry(env.MY_DO, {
+ *     const registry = createDORegistry(env.MY_DO, {
  *       indexDO: env.FAST_REGISTRY_DO,
  *     })
  *
@@ -443,18 +443,18 @@ export interface FastRegistry {
  * }
  * ```
  */
-export function createFastRegistry(
+export function createDORegistry(
   targetNamespace: DurableObjectNamespace,
-  config?: FastRegistryConfig & {
+  config?: DORegistryConfig & {
     /** Optional L2 Index DO namespace for persistent storage */
     indexDO?: DurableObjectNamespace
   }
-): FastRegistry {
+): DORegistry {
   const mergedConfig = { ...DEFAULT_FAST_REGISTRY_CONFIG, ...config }
   const indexDO = config?.indexDO
 
   // Internal stats tracking
-  const stats: FastRegistryStats = {
+  const stats: DORegistryStats = {
     l1CacheHits: 0,
     l2IndexHits: 0,
     l3CreationFallbacks: 0,
@@ -477,7 +477,7 @@ export function createFastRegistry(
   /**
    * Lookup entry from L2 Index DO
    */
-  async function lookupFromL2(name: string): Promise<FastRegistryEntry | null> {
+  async function lookupFromL2(name: string): Promise<DORegistryEntry | null> {
     if (!indexDO) return null
 
     try {
@@ -497,7 +497,7 @@ export function createFastRegistry(
         return null
       }
 
-      return response.json<FastRegistryEntry>()
+      return response.json<DORegistryEntry>()
     } catch {
       // L2 errors should not block - fall back to L3
       return null
@@ -507,7 +507,7 @@ export function createFastRegistry(
   /**
    * Register entry in L2 Index DO
    */
-  async function registerInL2(entry: FastRegistryEntry): Promise<void> {
+  async function registerInL2(entry: DORegistryEntry): Promise<void> {
     if (!indexDO) return
 
     try {
@@ -527,11 +527,11 @@ export function createFastRegistry(
   /**
    * Create a new DO via L3 (newUniqueId)
    */
-  function createViaL3(name: string): { id: DurableObjectId; entry: FastRegistryEntry } {
+  function createViaL3(name: string): { id: DurableObjectId; entry: DORegistryEntry } {
     const id = targetNamespace.newUniqueId()
     const now = Date.now()
 
-    const entry: FastRegistryEntry = {
+    const entry: DORegistryEntry = {
       name,
       hexId: id.toString(),
       namespace,
@@ -554,7 +554,7 @@ export function createFastRegistry(
       ctx?: ExecutionContext
     ): Promise<{
       stub: DurableObjectStub
-      entry: FastRegistryEntry
+      entry: DORegistryEntry
       tier: 'l1-cache' | 'l2-index' | 'l3-created'
       latencyMs: number
     }> {
@@ -626,7 +626,7 @@ export function createFastRegistry(
       }
     },
 
-    async register(entry: FastRegistryEntry): Promise<void> {
+    async register(entry: DORegistryEntry): Promise<void> {
       stats.registrations++
 
       // Register in both L1 and L2 in parallel
@@ -635,19 +635,19 @@ export function createFastRegistry(
 
     async invalidate(name: string): Promise<void> {
       // Invalidate L1 cache
-      await invalidateFastRegistryCache(mergedConfig, namespace, name)
+      await invalidateDORegistryCache(mergedConfig, namespace, name)
 
-      // Note: L2 invalidation would require a delete endpoint in FastRegistryDO
+      // Note: L2 invalidation would require a delete endpoint in DORegistryDO
       // For now, entries will naturally be overwritten on next register
     },
 
-    getStats(): FastRegistryStats {
+    getStats(): DORegistryStats {
       return { ...stats }
     },
   }
 }
 
-export class FastRegistryDO implements DurableObject {
+export class DORegistryDO implements DurableObject {
   private sql: DurableObjectStorage['sql']
   private initialized = false
 
@@ -690,7 +690,7 @@ export class FastRegistryDO implements DurableObject {
 
     // POST /register
     if (path === '/register' && request.method === 'POST') {
-      const entry = await request.json<FastRegistryEntry>()
+      const entry = await request.json<DORegistryEntry>()
       return this.handleRegister(entry)
     }
 
@@ -745,7 +745,7 @@ export class FastRegistryDO implements DurableObject {
     }
 
     const row = rows[0]
-    const entry: FastRegistryEntry = {
+    const entry: DORegistryEntry = {
       namespace: row.namespace,
       name: row.name,
       hexId: row.hex_id,
@@ -763,7 +763,7 @@ export class FastRegistryDO implements DurableObject {
    *
    * Upserts an entry into the registry.
    */
-  private handleRegister(entry: FastRegistryEntry): Response {
+  private handleRegister(entry: DORegistryEntry): Response {
     const metadataJson = entry.metadata ? JSON.stringify(entry.metadata) : null
 
     this.sql.exec(

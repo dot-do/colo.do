@@ -3,10 +3,31 @@
  *
  * Contains information about Cloudflare's global network of data centers.
  * IATA codes, coordinates, region info, and DO capability status.
+ *
+ * Types are aligned with @dotdo/types/workers/colo for ecosystem compatibility.
+ * When @dotdo/types is published, this module will re-export from there.
  */
 
 /**
+ * Geographic regions for colos
+ *
+ * Compatible with @dotdo/types ColoRegion.
+ */
+export type ColoRegion =
+  | 'wnam'  // Western North America
+  | 'enam'  // Eastern North America
+  | 'weur'  // Western Europe
+  | 'eeur'  // Eastern Europe
+  | 'apac'  // Asia Pacific
+  | 'oc'    // Oceania
+  | 'sam'   // South America
+  | 'afr'   // Africa
+  | 'me'    // Middle East
+
+/**
  * Colo information including coordinates and capabilities
+ *
+ * Compatible with @dotdo/types ColoData interface.
  */
 export interface ColoInfo {
   /** IATA airport code (e.g., 'IAD', 'ORD', 'LAX') */
@@ -24,20 +45,6 @@ export interface ColoInfo {
   /** Whether this colo supports Durable Objects */
   hasDO: boolean
 }
-
-/**
- * Geographic regions for colos
- */
-export type ColoRegion =
-  | 'wnam'  // Western North America
-  | 'enam'  // Eastern North America
-  | 'weur'  // Western Europe
-  | 'eeur'  // Eastern Europe
-  | 'apac'  // Asia Pacific
-  | 'oc'    // Oceania
-  | 'sam'   // South America
-  | 'afr'   // Africa
-  | 'me'    // Middle East
 
 /**
  * Core Cloudflare colocations with DO support

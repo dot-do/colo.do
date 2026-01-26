@@ -3,12 +3,16 @@
  *
  * Utilities for determining current location and calculating
  * distances between colocations.
+ *
+ * Types are aligned with @dotdo/types/workers/colo for ecosystem compatibility.
  */
 
 import { COLOS, getColo, type ColoInfo } from './colos.js'
 
 /**
  * Location information extracted from request context
+ *
+ * Compatible with @dotdo/types LocationInfo interface.
  */
 export interface LocationInfo {
   /** Current colo IATA code (from cf.colo) */

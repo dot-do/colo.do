@@ -1,7 +1,7 @@
 /**
- * Tests for FastRegistry - 31x faster DO lookups using idFromString
+ * Tests for DORegistry - 31x faster DO lookups using idFromString
  *
- * FastRegistry stores hex DO IDs and uses idFromString() (~5ms) instead of
+ * DORegistry stores hex DO IDs and uses idFromString() (~5ms) instead of
  * idFromName() (~157ms) for massive performance improvement.
  *
  * Architecture:
@@ -13,23 +13,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   // Types
-  type FastRegistryEntry,
-  type FastRegistryConfig,
-  type FastRegistryStats,
-  type FastRegistry,
+  type DORegistryEntry,
+  type DORegistryConfig,
+  type DORegistryStats,
+  type DORegistry,
   // Factory function
-  createFastRegistry,
+  createDORegistry,
   // L1 Cache helpers
   getCache,
   buildCacheKey,
   isCacheStale,
   cacheEntry,
   lookupFromCache,
-  invalidateFastRegistryCache,
+  invalidateDORegistryCache,
   DEFAULT_FAST_REGISTRY_CONFIG,
   // L2 Index DO
-  FastRegistryDO,
-} from '../fast-registry.js'
+  DORegistryDO,
+} from '../do-registry.js'
 
 // ============================================================================
 // Mock Cloudflare Cache API
@@ -59,7 +59,7 @@ const createMockContext = () => ({
 // Test Data
 // ============================================================================
 
-const sampleEntry: FastRegistryEntry = {
+const sampleEntry: DORegistryEntry = {
   name: 'my-database',
   hexId: 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890',
   namespace: 'POSTGRES_DO',
@@ -69,7 +69,7 @@ const sampleEntry: FastRegistryEntry = {
   metadata: { tier: 'premium' },
 }
 
-const defaultConfig: FastRegistryConfig = {
+const defaultConfig: DORegistryConfig = {
   cacheTtlSeconds: 30,
   staleTtlSeconds: 300,
   cacheKeyPrefix: 'https://fast-registry.internal',
@@ -80,10 +80,10 @@ const defaultConfig: FastRegistryConfig = {
 // Type Export Tests
 // ============================================================================
 
-describe('FastRegistry Types', () => {
-  describe('FastRegistryEntry', () => {
+describe('DORegistry Types', () => {
+  describe('DORegistryEntry', () => {
     it('should have required fields', () => {
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
@@ -101,7 +101,7 @@ describe('FastRegistry Types', () => {
     })
 
     it('should support optional metadata', () => {
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
@@ -120,7 +120,7 @@ describe('FastRegistry Types', () => {
     })
 
     it('should allow undefined metadata', () => {
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
@@ -133,14 +133,14 @@ describe('FastRegistry Types', () => {
     })
   })
 
-  describe('FastRegistryConfig', () => {
+  describe('DORegistryConfig', () => {
     it('should have optional cache TTL', () => {
-      const config: FastRegistryConfig = {}
+      const config: DORegistryConfig = {}
       expect(config.cacheTtlSeconds).toBeUndefined()
     })
 
     it('should support all optional fields', () => {
-      const config: FastRegistryConfig = {
+      const config: DORegistryConfig = {
         cacheTtlSeconds: 60,
         staleTtlSeconds: 600,
         cacheKeyPrefix: 'https://custom.registry.internal',
@@ -161,9 +161,9 @@ describe('FastRegistry Types', () => {
     })
   })
 
-  describe('FastRegistryStats', () => {
+  describe('DORegistryStats', () => {
     it('should track L1 cache hits', () => {
-      const stats: FastRegistryStats = {
+      const stats: DORegistryStats = {
         l1CacheHits: 100,
         l2IndexHits: 50,
         l3CreationFallbacks: 10,
@@ -176,7 +176,7 @@ describe('FastRegistry Types', () => {
     })
 
     it('should track L2 index hits', () => {
-      const stats: FastRegistryStats = {
+      const stats: DORegistryStats = {
         l1CacheHits: 0,
         l2IndexHits: 100,
         l3CreationFallbacks: 0,
@@ -189,7 +189,7 @@ describe('FastRegistry Types', () => {
     })
 
     it('should track L3 creation fallbacks', () => {
-      const stats: FastRegistryStats = {
+      const stats: DORegistryStats = {
         l1CacheHits: 0,
         l2IndexHits: 0,
         l3CreationFallbacks: 100,
@@ -202,7 +202,7 @@ describe('FastRegistry Types', () => {
     })
 
     it('should calculate hit rate', () => {
-      const stats: FastRegistryStats = {
+      const stats: DORegistryStats = {
         l1CacheHits: 70,
         l2IndexHits: 20,
         l3CreationFallbacks: 10,
@@ -334,7 +334,7 @@ describe('L1 Cache Helpers', () => {
     })
 
     it('should use custom TTL values', async () => {
-      const customConfig: FastRegistryConfig = {
+      const customConfig: DORegistryConfig = {
         cacheTtlSeconds: 60,
         staleTtlSeconds: 600,
         cacheKeyPrefix: 'https://fast-registry.internal',
@@ -353,7 +353,7 @@ describe('L1 Cache Helpers', () => {
       await cacheEntry(defaultConfig, sampleEntry)
 
       const response = mockCache.put.mock.calls[0][1] as Response
-      const body = await response.clone().json() as FastRegistryEntry
+      const body = await response.clone().json() as DORegistryEntry
 
       expect(body.name).toBe(sampleEntry.name)
       expect(body.hexId).toBe(sampleEntry.hexId)
@@ -433,11 +433,11 @@ describe('L1 Cache Helpers', () => {
     })
   })
 
-  describe('invalidateFastRegistryCache()', () => {
+  describe('invalidateDORegistryCache()', () => {
     it('should delete entry from cache', async () => {
       mockCache.delete.mockResolvedValue(true)
 
-      await invalidateFastRegistryCache(defaultConfig, 'POSTGRES_DO', 'my-database')
+      await invalidateDORegistryCache(defaultConfig, 'POSTGRES_DO', 'my-database')
 
       expect(mockCache.delete).toHaveBeenCalledWith(
         'https://fast-registry.internal/fast/POSTGRES_DO/my-database'
@@ -449,7 +449,7 @@ describe('L1 Cache Helpers', () => {
 
       // Should not throw
       await expect(
-        invalidateFastRegistryCache(defaultConfig, 'POSTGRES_DO', 'my-database')
+        invalidateDORegistryCache(defaultConfig, 'POSTGRES_DO', 'my-database')
       ).resolves.not.toThrow()
     })
 
@@ -458,7 +458,7 @@ describe('L1 Cache Helpers', () => {
 
       // Should not throw even if key didn't exist
       await expect(
-        invalidateFastRegistryCache(defaultConfig, 'POSTGRES_DO', 'nonexistent')
+        invalidateDORegistryCache(defaultConfig, 'POSTGRES_DO', 'nonexistent')
       ).resolves.not.toThrow()
     })
   })
@@ -530,7 +530,7 @@ describe('Edge Cases', () => {
   })
 
   it('should handle entries with no metadata', async () => {
-    const entryNoMetadata: FastRegistryEntry = {
+    const entryNoMetadata: DORegistryEntry = {
       name: 'simple-do',
       hexId: 'abc123def456',
       namespace: 'SIMPLE_DO',
@@ -542,7 +542,7 @@ describe('Edge Cases', () => {
     await cacheEntry(defaultConfig, entryNoMetadata)
 
     const response = mockCache.put.mock.calls[0][1] as Response
-    const body = await response.clone().json() as FastRegistryEntry
+    const body = await response.clone().json() as DORegistryEntry
 
     expect(body.metadata).toBeUndefined()
   })
@@ -591,7 +591,7 @@ describe('Edge Cases', () => {
 })
 
 // ============================================================================
-// L2 Index DO Tests (FastRegistryDO)
+// L2 Index DO Tests (DORegistryDO)
 // ============================================================================
 
 /**
@@ -745,13 +745,13 @@ function createMockState(): DurableObjectState {
   } as unknown as DurableObjectState
 }
 
-describe('FastRegistryDO (L2 Index)', () => {
+describe('DORegistryDO (L2 Index)', () => {
   let state: DurableObjectState
-  let registryDO: FastRegistryDO
+  let registryDO: DORegistryDO
 
   beforeEach(() => {
     state = createMockState()
-    registryDO = new FastRegistryDO(state)
+    registryDO = new DORegistryDO(state)
   })
 
   describe('GET /lookup/{namespace}/{name}', () => {
@@ -765,7 +765,7 @@ describe('FastRegistryDO (L2 Index)', () => {
 
     it('should return entry if it exists', async () => {
       // First register an entry
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'user-123',
         hexId: 'abc123def456',
@@ -787,7 +787,7 @@ describe('FastRegistryDO (L2 Index)', () => {
       const response = await registryDO.fetch(lookupRequest)
 
       expect(response.status).toBe(200)
-      const result = await response.json<FastRegistryEntry>()
+      const result = await response.json<DORegistryEntry>()
       expect(result.name).toBe('user-123')
       expect(result.namespace).toBe('MY_DO')
       expect(result.hexId).toBe('abc123def456')
@@ -796,7 +796,7 @@ describe('FastRegistryDO (L2 Index)', () => {
     })
 
     it('should handle URL-encoded names', async () => {
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'user/with/slashes',
         hexId: 'abc123',
@@ -817,14 +817,14 @@ describe('FastRegistryDO (L2 Index)', () => {
       const response = await registryDO.fetch(lookupRequest)
 
       expect(response.status).toBe(200)
-      const result = await response.json<FastRegistryEntry>()
+      const result = await response.json<DORegistryEntry>()
       expect(result.name).toBe('user/with/slashes')
     })
   })
 
   describe('POST /register', () => {
     it('should create a new entry', async () => {
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         namespace: 'POSTGRES_DO',
         name: 'tenant-abc',
         hexId: 'deadbeef1234',
@@ -851,13 +851,13 @@ describe('FastRegistryDO (L2 Index)', () => {
         new Request('https://internal/lookup/POSTGRES_DO/tenant-abc')
       )
       expect(lookupResponse.status).toBe(200)
-      const lookupResult = await lookupResponse.json<FastRegistryEntry>()
+      const lookupResult = await lookupResponse.json<DORegistryEntry>()
       expect(lookupResult.hexId).toBe('deadbeef1234')
     })
 
     it('should update existing entry (upsert)', async () => {
       // Create initial entry
-      const entry1: FastRegistryEntry = {
+      const entry1: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'instance-1',
         hexId: 'original-hex',
@@ -873,7 +873,7 @@ describe('FastRegistryDO (L2 Index)', () => {
       }))
 
       // Update with new hexId and locationHint
-      const entry2: FastRegistryEntry = {
+      const entry2: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'instance-1',
         hexId: 'updated-hex',
@@ -895,7 +895,7 @@ describe('FastRegistryDO (L2 Index)', () => {
       const lookupResponse = await registryDO.fetch(
         new Request('https://internal/lookup/MY_DO/instance-1')
       )
-      const result = await lookupResponse.json<FastRegistryEntry>()
+      const result = await lookupResponse.json<DORegistryEntry>()
 
       expect(result.hexId).toBe('updated-hex')
       expect(result.locationHint).toBe('weur')
@@ -908,7 +908,7 @@ describe('FastRegistryDO (L2 Index)', () => {
   describe('POST /access', () => {
     it('should update lastAccessedAt', async () => {
       // Create entry
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'access-test',
         hexId: 'hex123',
@@ -944,7 +944,7 @@ describe('FastRegistryDO (L2 Index)', () => {
       const lookupResponse = await registryDO.fetch(
         new Request('https://internal/lookup/MY_DO/access-test')
       )
-      const lookupResult = await lookupResponse.json<FastRegistryEntry>()
+      const lookupResult = await lookupResponse.json<DORegistryEntry>()
       expect(lookupResult.lastAccessedAt).toBe(5000000)
     })
 
@@ -1022,7 +1022,7 @@ describe('FastRegistryDO (L2 Index)', () => {
 })
 
 // ============================================================================
-// createFastRegistry Tests
+// createDORegistry Tests
 // ============================================================================
 
 /**
@@ -1070,7 +1070,7 @@ function createMockNamespace() {
  * Create mock L2 Index DO namespace
  */
 function createMockIndexDONamespace(
-  registryDO: FastRegistryDO
+  registryDO: DORegistryDO
 ): DurableObjectNamespace {
   const mockStub: DurableObjectStub = {
     id: { toString: () => 'index', equals: () => false, name: 'index' } as DurableObjectId,
@@ -1095,10 +1095,10 @@ function createMockIndexDONamespace(
   } as unknown as DurableObjectNamespace
 }
 
-describe('createFastRegistry', () => {
+describe('createDORegistry', () => {
   let targetNamespace: DurableObjectNamespace
   let indexDOState: DurableObjectState
-  let indexDO: FastRegistryDO
+  let indexDO: DORegistryDO
   let indexDONamespace: DurableObjectNamespace
 
   beforeEach(() => {
@@ -1109,14 +1109,14 @@ describe('createFastRegistry', () => {
 
     targetNamespace = createMockNamespace()
     indexDOState = createMockState()
-    indexDO = new FastRegistryDO(indexDOState)
+    indexDO = new DORegistryDO(indexDOState)
     indexDONamespace = createMockIndexDONamespace(indexDO)
   })
 
   describe('getStub', () => {
     it('should return stub from L1 cache', async () => {
       // Pre-populate L1 cache
-      const cachedEntry: FastRegistryEntry = {
+      const cachedEntry: DORegistryEntry = {
         name: 'cached-do',
         hexId: 'cached-hex-id-123',
         namespace: 'default',
@@ -1135,7 +1135,7 @@ describe('createFastRegistry', () => {
         })
       )
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1156,7 +1156,7 @@ describe('createFastRegistry', () => {
       mockCache.match.mockResolvedValue(undefined)
 
       // Pre-populate L2 index
-      const indexedEntry: FastRegistryEntry = {
+      const indexedEntry: DORegistryEntry = {
         name: 'indexed-do',
         hexId: 'indexed-hex-id-456',
         namespace: 'default',
@@ -1173,7 +1173,7 @@ describe('createFastRegistry', () => {
         })
       )
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1199,7 +1199,7 @@ describe('createFastRegistry', () => {
 
       // L2 index is empty (no pre-population)
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1223,7 +1223,7 @@ describe('createFastRegistry', () => {
       mockCache.match.mockResolvedValue(undefined)
 
       // No L2 index DO configured
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       const stub = await registry.getStub('no-l2-do')
 
@@ -1237,7 +1237,7 @@ describe('createFastRegistry', () => {
 
   describe('getStubWithResult', () => {
     it('should return tier information for L1 hit', async () => {
-      const cachedEntry: FastRegistryEntry = {
+      const cachedEntry: DORegistryEntry = {
         name: 'l1-hit',
         hexId: 'l1-hex-id',
         namespace: 'default',
@@ -1256,7 +1256,7 @@ describe('createFastRegistry', () => {
         })
       )
 
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       const result = await registry.getStubWithResult('l1-hit')
 
@@ -1269,7 +1269,7 @@ describe('createFastRegistry', () => {
     it('should return tier information for L2 hit', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const indexedEntry: FastRegistryEntry = {
+      const indexedEntry: DORegistryEntry = {
         name: 'l2-hit',
         hexId: 'l2-hex-id',
         namespace: 'default',
@@ -1286,7 +1286,7 @@ describe('createFastRegistry', () => {
         })
       )
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1300,7 +1300,7 @@ describe('createFastRegistry', () => {
     it('should return tier information for L3 creation', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1315,9 +1315,9 @@ describe('createFastRegistry', () => {
 
   describe('register', () => {
     it('should register entry in L1 cache', async () => {
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         name: 'register-test',
         hexId: 'register-hex-id',
         namespace: 'default',
@@ -1334,11 +1334,11 @@ describe('createFastRegistry', () => {
     })
 
     it('should register entry in L2 index', async () => {
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
-      const entry: FastRegistryEntry = {
+      const entry: DORegistryEntry = {
         name: 'register-l2-test',
         hexId: 'register-l2-hex-id',
         namespace: 'default',
@@ -1354,14 +1354,14 @@ describe('createFastRegistry', () => {
         new Request('https://internal/lookup/default/register-l2-test')
       )
       expect(lookupResponse.status).toBe(200)
-      const result = await lookupResponse.json<FastRegistryEntry>()
+      const result = await lookupResponse.json<DORegistryEntry>()
       expect(result.hexId).toBe('register-l2-hex-id')
     })
 
     it('should register new DO in background after L3 creation', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
@@ -1384,7 +1384,7 @@ describe('createFastRegistry', () => {
 
   describe('invalidate', () => {
     it('should invalidate L1 cache entry', async () => {
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       await registry.invalidate('invalidate-test')
 
@@ -1398,7 +1398,7 @@ describe('createFastRegistry', () => {
     it('should track stats correctly', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       // Initial stats
       let stats = registry.getStats()
@@ -1420,12 +1420,12 @@ describe('createFastRegistry', () => {
     })
 
     it('should calculate hit rate correctly', async () => {
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: indexDONamespace,
       })
 
       // Set up L1 cache hits - use mockImplementation to return fresh Response each time
-      const cachedEntry: FastRegistryEntry = {
+      const cachedEntry: DORegistryEntry = {
         name: 'cached',
         hexId: 'cached-hex',
         namespace: 'default',
@@ -1463,7 +1463,7 @@ describe('createFastRegistry', () => {
     })
 
     it('should return a copy of stats (not reference)', async () => {
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       const stats1 = registry.getStats()
       stats1.l1CacheHits = 999
@@ -1489,7 +1489,7 @@ describe('createFastRegistry', () => {
         })),
       } as unknown as DurableObjectNamespace
 
-      const registry = createFastRegistry(targetNamespace, {
+      const registry = createDORegistry(targetNamespace, {
         indexDO: errorIndexDONamespace,
       })
 
@@ -1504,7 +1504,7 @@ describe('createFastRegistry', () => {
     it('should handle concurrent lookups for the same name', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       // Fire multiple concurrent lookups
       const results = await Promise.all([
@@ -1526,7 +1526,7 @@ describe('createFastRegistry', () => {
     it('should work without ExecutionContext', async () => {
       mockCache.match.mockResolvedValue(undefined)
 
-      const registry = createFastRegistry(targetNamespace)
+      const registry = createDORegistry(targetNamespace)
 
       // No ctx passed - should still work (fire and forget registration)
       const stub = await registry.getStub('no-ctx')

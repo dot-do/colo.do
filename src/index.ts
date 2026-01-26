@@ -133,24 +133,24 @@ export {
   type RegisterTenantInput,
 } from './postgres-index.js'
 
-// FastRegistry - 31x faster DO ID resolution
+// DORegistry - 31x faster DO ID resolution
 export {
   // Factory function
-  createFastRegistry,
+  createDORegistry,
   // L2 Index DO
-  FastRegistryDO,
+  DORegistryDO,
   // L1 Cache helpers
   getCache,
   buildCacheKey,
   isCacheStale,
   cacheEntry,
   lookupFromCache,
-  invalidateFastRegistryCache,
+  invalidateDORegistryCache,
   DEFAULT_FAST_REGISTRY_CONFIG,
   // Types
-  type FastRegistry,
-  type FastRegistryEntry,
-  type FastRegistryConfig,
-  type FastRegistryStats,
-  type FastRegistryEnv,
-} from './fast-registry.js'
+  type DORegistry,
+  type DORegistryEntry,
+  type DORegistryConfig,
+  type DORegistryStats,
+  type DORegistryEnv,
+} from './do-registry.js'
