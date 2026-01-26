@@ -469,18 +469,42 @@ export default {
     }
 
     // Proxy all other requests through the colo DO
-    // Use Worker's colo and registry with newUniqueId() to create DOs locally
+    // If subdomain specifies a colo (e.g., lhr.colo.do), use that colo's DO from registry
+    // Otherwise use the Worker's colo
     const workerColo = cf?.colo || 'ORD'
+    const targetColo = colo?.toUpperCase() || workerColo
 
-    // Create registry - uses newUniqueId() which places DOs in current Worker's colo
-    const registry = createDORegistry(COLO, {
-      indexDO: env.DO_REGISTRY,
-    })
+    // Look up the target colo's DO from the registry
+    // The registry stores DOs by colo name, created with newUniqueId() in that colo
+    if (env.DO_REGISTRY) {
+      try {
+        const registryId = env.DO_REGISTRY.idFromName('index')
+        const registryStub = env.DO_REGISTRY.get(registryId)
 
-    // Get or create stub for this Worker's colo
-    const stub = await registry.getStub(workerColo, undefined, { request: req })
+        // Look up the DO for the target colo
+        const lookupRes = await registryStub.fetch(
+          `https://internal/lookup/COLO/${encodeURIComponent(targetColo)}`
+        )
+
+        if (lookupRes.ok) {
+          const entry = await lookupRes.json() as { id: string; colo: string }
+          // Use idFromString with the registered DO ID
+          const doId = COLO.idFromString(entry.id)
+          const stub = COLO.get(doId)
+          const doReq = new Request(req.url, req)
+          doReq.headers.set('X-Requested-Colo', targetColo)
+          return stub.fetch(doReq)
+        }
+      } catch {
+        // Registry lookup failed, fall through to fallback
+      }
+    }
+
+    // Fallback: use idFromName for unregistered colos
+    // This will route to wherever CF places the DO (often ORD)
+    const stub = COLO.get(COLO.idFromName(targetColo))
     const doReq = new Request(req.url, req)
-    doReq.headers.set('X-Requested-Colo', workerColo)
+    doReq.headers.set('X-Requested-Colo', targetColo)
     return stub.fetch(doReq)
   },
 }
