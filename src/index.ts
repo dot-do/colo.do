@@ -132,3 +132,22 @@ export {
   type PostgresIndexEnv,
   type RegisterTenantInput,
 } from './postgres-index.js'
+
+// FastRegistry - 31x faster DO ID resolution
+export {
+  // L2 Index DO
+  FastRegistryDO,
+  // L1 Cache helpers
+  getCache,
+  buildCacheKey,
+  isCacheStale,
+  cacheEntry,
+  lookupFromCache,
+  invalidateFastRegistryCache,
+  DEFAULT_FAST_REGISTRY_CONFIG,
+  // Types
+  type FastRegistryEntry,
+  type FastRegistryConfig,
+  type FastRegistryStats,
+  type FastRegistryEnv,
+} from './fast-registry.js'
