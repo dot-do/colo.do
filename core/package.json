@@ -1,6 +1,6 @@
 {
   "name": "@dotdo/colo",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Location-aware Durable Objects - create, target, and manage DOs in specific Cloudflare colocations",
   "type": "module",
   "main": "dist/index.js",
