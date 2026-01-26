@@ -120,3 +120,15 @@ export {
   type CacheConfig,
   type CachedEnvOptions,
 } from './cached-registry.js'
+
+// PostgreSQL Index for postgres.do tenant routing
+export {
+  createPostgresIndex,
+  getRegionForColo,
+  PostgresIndexDO,
+  type PostgresTenantEntry,
+  type PostgresIndexConfig,
+  type PostgresIndexStats,
+  type PostgresIndexEnv,
+  type RegisterTenantInput,
+} from './postgres-index.js'
