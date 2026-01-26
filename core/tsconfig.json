@@ -16,5 +16,5 @@
     "types": ["@cloudflare/workers-types"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "core"]
+  "exclude": ["node_modules", "dist", "src/__tests__"]
 }

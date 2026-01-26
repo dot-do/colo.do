@@ -61,7 +61,7 @@
  *       namespace: 'MY_DO',
  *       name: 'user-123',
  *       hexId: id.toString(),
- *       locationHint: 'enam',
+ *       colo: request.cf.colo, // IATA code: IAD, LAX, ORD, etc.
  *     }))
  *     return env.MY_DO.get(id).fetch(request)
  *   }
@@ -71,7 +71,7 @@
  * @module fast-registry
  */
 
-import { getRegionForColo } from './postgres-index.js'
+import { createCollection, initCollectionsSchema, type Collection } from '@dotdo/collections'
 
 // ============================================================================
 // Helper Functions
@@ -98,14 +98,18 @@ export interface DORegistryEntry {
   hexId: string
   /** DO class namespace name (e.g., 'MY_DO') */
   namespace: string
-  /** Location hint region (enam, weur, apac, etc.) */
-  locationHint: string
+  /** IATA colo code where DO was created (IAD, LAX, ORD, LHR, etc.) */
+  colo: string
   /** When this entry was created */
   createdAt: number
   /** When this DO was last accessed */
   lastAccessedAt: number
+  /** Cloudflare locationHint used when creating (may differ from actual colo) */
+  locationHint?: string
   /** Additional metadata */
   metadata?: Record<string, unknown>
+  /** Index signature for @dotdo/collections compatibility */
+  [key: string]: unknown
 }
 
 /**
@@ -340,7 +344,12 @@ export async function invalidateDORegistryCache(
 export interface DORegistryGetOptions {
   /** Request object to extract colo from request.cf.colo */
   request?: Request
-  /** Explicit location hint (overrides request-based detection) */
+  /**
+   * Explicit colo or location hint - accepts multiple formats:
+   * - IATA code: 'IAD', 'LAX', 'ORD'
+   * - City name: 'WashingtonDC', 'LosAngeles', 'Chicago'
+   * - AWS region: 'us-east-1', 'us-west-2'
+   */
   locationHint?: string
 }
 
@@ -462,7 +471,7 @@ export interface DORegistry {
  *     })
  *
  *     // Fast lookup (~5ms vs ~157ms)
- *     // Pass request so new DOs get the correct locationHint from request.cf.colo
+ *     // Pass request so new DOs get the correct colo from request.cf.colo
  *     const stub = await registry.getStub('user-123', ctx, { request })
  *     return stub.fetch(request)
  *   }
@@ -551,30 +560,32 @@ export function createDORegistry(
   }
 
   /**
-   * Determine location hint from options
+   * Get the IATA colo code from options
+   * Returns the colo where the Worker is running (from request.cf.colo)
    */
-  function getLocationHintFromOptions(options?: DORegistryGetOptions): string | undefined {
-    // Explicit locationHint takes precedence
-    if (options?.locationHint) {
-      return options.locationHint
-    }
-
-    // Try to extract from request
+  function getColoFromOptions(options?: DORegistryGetOptions): string | undefined {
+    // Extract IATA colo code from request.cf.colo (where Worker is running)
     if (options?.request) {
       const cf = getCfFromRequest(options.request)
       if (cf?.colo) {
-        return getRegionForColo(cf.colo)
+        return cf.colo.toUpperCase()
       }
     }
 
-    // Return undefined - let the caller decide on a default or omit it
+    // Explicit locationHint as fallback (for testing or manual override)
+    if (options?.locationHint) {
+      return options.locationHint.toUpperCase()
+    }
+
+    // Return undefined - caller should always pass request in production
     return undefined
   }
 
   /**
    * Create a new DO via L3 (newUniqueId)
+   * The DO will be created in the current Worker's colo
    */
-  function createViaL3(name: string, locationHint?: string): { id: DurableObjectId; entry: DORegistryEntry } {
+  function createViaL3(name: string, colo?: string): { id: DurableObjectId; entry: DORegistryEntry } {
     const id = targetNamespace.newUniqueId()
     const now = Date.now()
 
@@ -582,8 +593,7 @@ export function createDORegistry(
       name,
       hexId: id.toString(),
       namespace,
-      // Only set locationHint if we actually know it
-      locationHint: locationHint ?? 'unknown',
+      colo: colo ?? 'UNKNOWN', // IATA code where DO was created
       createdAt: now,
       lastAccessedAt: now,
     }
@@ -655,9 +665,9 @@ export function createDORegistry(
       stats.l3CreationFallbacks++
       stats.hitRate = calculateHitRate()
 
-      // Determine location hint from request or options
-      const locationHint = getLocationHintFromOptions(options)
-      const { id, entry } = createViaL3(name, locationHint)
+      // Get colo from request.cf.colo - where the DO will be created
+      const colo = getColoFromOptions(options)
+      const { id, entry } = createViaL3(name, colo)
       const stub = targetNamespace.get(id)
 
       // Register in background
@@ -698,39 +708,48 @@ export function createDORegistry(
   }
 }
 
+/**
+ * Build a unique key for storing registry entries.
+ * Format: `{namespace}:{name}`
+ */
+function buildEntryKey(namespace: string, name: string): string {
+  return `${namespace}:${encodeURIComponent(name)}`
+}
+
+/**
+ * DORegistryDO - Durable Object for L2 storage using @dotdo/collections
+ *
+ * Stores name->hexId mappings using collections for MongoDB-style queries.
+ * Used when L1 Cache misses. Provides significant cost savings over raw SQL
+ * through efficient JSON storage and indexing.
+ *
+ * Endpoints:
+ * - GET /lookup/{namespace}/{name} - Lookup an entry
+ * - POST /register - Register/update an entry
+ * - POST /access - Update lastAccessedAt timestamp
+ * - GET /stats - Get registry statistics
+ *
+ * @example
+ * ```typescript
+ * // In wrangler.toml:
+ * [[durable_objects.bindings]]
+ * name = "FAST_REGISTRY_DO"
+ * class_name = "DORegistryDO"
+ *
+ * // Export from worker:
+ * export { DORegistryDO } from 'colo.do'
+ * ```
+ */
 export class DORegistryDO implements DurableObject {
-  private sql: DurableObjectStorage['sql']
-  private initialized = false
+  private entries: Collection<DORegistryEntry>
 
   constructor(private state: DurableObjectState) {
-    this.sql = state.storage.sql
-  }
-
-  private ensureInitialized(): void {
-    if (this.initialized) return
-
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS entries (
-        namespace TEXT NOT NULL,
-        name TEXT NOT NULL,
-        hex_id TEXT NOT NULL,
-        location_hint TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        last_accessed_at INTEGER NOT NULL,
-        metadata TEXT,
-        PRIMARY KEY (namespace, name)
-      )
-    `)
-
-    this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_namespace ON entries(namespace)
-    `)
-
-    this.initialized = true
+    // Initialize collections schema and create the entries collection
+    initCollectionsSchema(state.storage.sql)
+    this.entries = createCollection<DORegistryEntry>(state.storage.sql, 'registry_entries')
   }
 
   async fetch(request: Request): Promise<Response> {
-    this.ensureInitialized()
     const url = new URL(request.url)
     const path = url.pathname
 
@@ -774,36 +793,11 @@ export class DORegistryDO implements DurableObject {
     const namespace = decodeURIComponent(pathParts[0])
     const name = decodeURIComponent(pathParts.slice(1).join('/'))
 
-    const result = this.sql.exec<{
-      namespace: string
-      name: string
-      hex_id: string
-      location_hint: string
-      created_at: number
-      last_accessed_at: number
-      metadata: string | null
-    }>(
-      `SELECT namespace, name, hex_id, location_hint, created_at, last_accessed_at, metadata
-       FROM entries
-       WHERE namespace = ? AND name = ?`,
-      namespace,
-      name
-    )
+    const key = buildEntryKey(namespace, name)
+    const entry = this.entries.get(key)
 
-    const rows = [...result]
-    if (rows.length === 0) {
+    if (!entry) {
       return new Response('Not Found', { status: 404 })
-    }
-
-    const row = rows[0]
-    const entry: DORegistryEntry = {
-      namespace: row.namespace,
-      name: row.name,
-      hexId: row.hex_id,
-      locationHint: row.location_hint,
-      createdAt: row.created_at,
-      lastAccessedAt: row.last_accessed_at,
-      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
     }
 
     return Response.json(entry)
@@ -813,26 +807,19 @@ export class DORegistryDO implements DurableObject {
    * Handle POST /register
    *
    * Upserts an entry into the registry.
+   * Preserves original createdAt on updates.
    */
   private handleRegister(entry: DORegistryEntry): Response {
-    const metadataJson = entry.metadata ? JSON.stringify(entry.metadata) : null
+    const key = buildEntryKey(entry.namespace, entry.name)
 
-    this.sql.exec(
-      `INSERT INTO entries (namespace, name, hex_id, location_hint, created_at, last_accessed_at, metadata)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (namespace, name) DO UPDATE SET
-         hex_id = excluded.hex_id,
-         location_hint = excluded.location_hint,
-         last_accessed_at = excluded.last_accessed_at,
-         metadata = excluded.metadata`,
-      entry.namespace,
-      entry.name,
-      entry.hexId,
-      entry.locationHint,
-      entry.createdAt,
-      entry.lastAccessedAt,
-      metadataJson
-    )
+    // Check for existing entry to preserve createdAt
+    const existing = this.entries.get(key)
+    if (existing) {
+      // Preserve original createdAt on update
+      this.entries.put(key, { ...entry, createdAt: existing.createdAt })
+    } else {
+      this.entries.put(key, entry)
+    }
 
     return Response.json({ ok: true })
   }
@@ -843,14 +830,12 @@ export class DORegistryDO implements DurableObject {
    * Updates the lastAccessedAt timestamp for an entry.
    */
   private handleAccess(namespace: string, name: string, accessedAt: number): Response {
-    this.sql.exec(
-      `UPDATE entries
-       SET last_accessed_at = ?
-       WHERE namespace = ? AND name = ?`,
-      accessedAt,
-      namespace,
-      name
-    )
+    const key = buildEntryKey(namespace, name)
+    const existing = this.entries.get(key)
+
+    if (existing) {
+      this.entries.put(key, { ...existing, lastAccessedAt: accessedAt })
+    }
 
     return Response.json({ ok: true })
   }
@@ -861,22 +846,15 @@ export class DORegistryDO implements DurableObject {
    * Returns total entry count and counts by namespace.
    */
   private handleStats(): Response {
-    // Get total count
-    const countResult = this.sql.exec<{ count: number }>(
-      `SELECT COUNT(*) as count FROM entries`
-    )
-    const countRows = [...countResult]
-    const totalEntries = countRows[0]?.count ?? 0
+    // Get all entries to compute stats
+    // Note: For large registries, we might want to maintain counters separately
+    const allEntries = this.entries.list()
+    const totalEntries = allEntries.length
 
-    // Get counts by namespace
-    const namespaceResult = this.sql.exec<{ namespace: string; count: number }>(
-      `SELECT namespace, COUNT(*) as count
-       FROM entries
-       GROUP BY namespace`
-    )
+    // Count by namespace
     const byNamespace: Record<string, number> = {}
-    for (const row of namespaceResult) {
-      byNamespace[row.namespace] = row.count
+    for (const entry of allEntries) {
+      byNamespace[entry.namespace] = (byNamespace[entry.namespace] || 0) + 1
     }
 
     return Response.json({

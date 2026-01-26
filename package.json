@@ -1,7 +1,7 @@
 {
   "name": "colo.do",
   "version": "0.1.0",
-  "description": "Location-aware Durable Objects - create, target, and manage DOs in specific Cloudflare colocations",
+  "description": "colo.do - Location-aware Durable Objects managed service",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,31 +10,24 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./tiny": {
-      "types": "./dist/tiny.d.ts",
-      "import": "./dist/tiny.js"
-    },
-    "./minimal": {
-      "types": "./dist/location-only.d.ts",
-      "import": "./dist/location-only.js"
-    },
-    "./worker": {
-      "types": "./dist/worker.d.ts",
-      "import": "./dist/worker.js"
     }
   },
   "files": [
     "dist",
-    "src"
+    "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm build:core && tsc",
+    "build:core": "cd core && pnpm build",
     "dev": "tsc --watch",
     "test": "vitest",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist && cd core && rm -rf dist",
+    "deploy": "wrangler deploy",
+    "prepublishOnly": "pnpm build",
+    "version": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "keywords": [
     "cloudflare",
@@ -51,20 +44,14 @@
   },
   "homepage": "https://colo.do",
   "devDependencies": {
+    "@changesets/cli": "^2.29.8",
     "@cloudflare/workers-types": "^4.20250121.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
-  },
-  "peerDependencies": {
-    "@cloudflare/workers-types": ">=4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@cloudflare/workers-types": {
-      "optional": true
-    }
+    "vitest": "^2.1.8",
+    "wrangler": "^4.0.0"
   },
   "dependencies": {
-    "capnweb": "^0.4.0"
+    "@dotdo/colo": "^0.1.0"
   }
 }

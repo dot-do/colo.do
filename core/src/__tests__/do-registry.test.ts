@@ -10,7 +10,8 @@
  * - L3: newUniqueId() fallback (~56ms)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest'
+import initSqlJs, { type Database } from 'sql.js'
 import {
   // Types
   type DORegistryEntry,
@@ -63,7 +64,7 @@ const sampleEntry: DORegistryEntry = {
   name: 'my-database',
   hexId: 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890',
   namespace: 'POSTGRES_DO',
-  locationHint: 'enam',
+  colo: 'enam',
   createdAt: Date.now(),
   lastAccessedAt: Date.now(),
   metadata: { tier: 'premium' },
@@ -87,7 +88,7 @@ describe('DORegistry Types', () => {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -95,7 +96,7 @@ describe('DORegistry Types', () => {
       expect(entry.name).toBe('test-do')
       expect(entry.hexId).toBe('abc123')
       expect(entry.namespace).toBe('MY_DO')
-      expect(entry.locationHint).toBe('enam')
+      expect(entry.colo).toBe('enam')
       expect(typeof entry.createdAt).toBe('number')
       expect(typeof entry.lastAccessedAt).toBe('number')
     })
@@ -105,7 +106,7 @@ describe('DORegistry Types', () => {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
-        locationHint: 'weur',
+        colo: 'weur',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
         metadata: {
@@ -124,7 +125,7 @@ describe('DORegistry Types', () => {
         name: 'test-do',
         hexId: 'abc123',
         namespace: 'MY_DO',
-        locationHint: 'apac',
+        colo: 'apac',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -534,7 +535,7 @@ describe('Edge Cases', () => {
       name: 'simple-do',
       hexId: 'abc123def456',
       namespace: 'SIMPLE_DO',
-      locationHint: 'enam',
+      colo: 'enam',
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     }
@@ -594,128 +595,113 @@ describe('Edge Cases', () => {
 // L2 Index DO Tests (DORegistryDO)
 // ============================================================================
 
+// sql.js instance (loaded once)
+let SQL: Awaited<ReturnType<typeof initSqlJs>>
+
 /**
- * Mock DurableObjectState with SQLite storage
+ * Mock SQL cursor that mimics Cloudflare's SqlStorageCursor
+ */
+class SqlCursor<T> {
+  private rows: T[]
+  readonly rowsRead: number
+  readonly rowsWritten: number
+
+  constructor(rows: T[], rowsRead: number, rowsWritten: number) {
+    this.rows = rows
+    this.rowsRead = rowsRead
+    this.rowsWritten = rowsWritten
+  }
+
+  one(): T | null {
+    return this.rows[0] ?? null
+  }
+
+  toArray(): T[] {
+    return this.rows
+  }
+
+  *[Symbol.iterator](): Iterator<T> {
+    for (const row of this.rows) {
+      yield row
+    }
+  }
+}
+
+/**
+ * Mock SqlStorage that wraps sql.js to simulate Cloudflare Workers SQLite API
+ */
+class MockSqlStorage {
+  private db: Database
+
+  constructor(db: Database) {
+    this.db = db
+  }
+
+  /**
+   * Execute SQL and return a cursor-like object
+   */
+  exec<T = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<T> {
+    // Handle multi-statement queries (for schema creation)
+    if (
+      query.includes(';') &&
+      query
+        .trim()
+        .split(';')
+        .filter((s) => s.trim()).length > 1
+    ) {
+      // Execute each statement separately
+      const statements = query.split(';').map((s) => s.trim()).filter((s) => s.length > 0)
+      for (const stmt of statements) {
+        this.db.run(stmt)
+      }
+      return new SqlCursor<T>([], 0, 0)
+    }
+
+    const isWrite = /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER)/i.test(query)
+
+    // Convert params to the format sql.js expects
+    const bindParams = params.map((p) => {
+      if (p === undefined) return null
+      return p
+    })
+
+    if (isWrite) {
+      this.db.run(query, bindParams)
+      const changes = this.db.getRowsModified()
+      return new SqlCursor<T>([], 0, changes)
+    } else {
+      const stmt = this.db.prepare(query)
+      stmt.bind(bindParams)
+      const rows: T[] = []
+      while (stmt.step()) {
+        const row = stmt.getAsObject() as T
+        rows.push(row)
+      }
+      stmt.free()
+      return new SqlCursor<T>(rows, rows.length, 0)
+    }
+  }
+
+  close(): void {
+    this.db.close()
+  }
+}
+
+// Global database for current test
+let currentDb: Database | null = null
+
+/**
+ * Mock DurableObjectState with SQLite storage using sql.js
  */
 function createMockState(): DurableObjectState {
-  // In-memory SQLite mock using Map
-  const tables = new Map<string, Map<string, Record<string, unknown>>>()
-  const indexes = new Set<string>()
-
-  // Simple SQL parser for our specific queries
-  const sql = {
-    exec: <T = unknown>(query: string, ...params: unknown[]) => {
-      const normalizedQuery = query.trim().toLowerCase()
-
-      // CREATE TABLE
-      if (normalizedQuery.startsWith('create table')) {
-        const match = query.match(/create table if not exists (\w+)/i)
-        if (match) {
-          const tableName = match[1]
-          if (!tables.has(tableName)) {
-            tables.set(tableName, new Map())
-          }
-        }
-        return { rowsWritten: 0, [Symbol.iterator]: () => [][Symbol.iterator]() }
-      }
-
-      // CREATE INDEX
-      if (normalizedQuery.startsWith('create index')) {
-        const match = query.match(/create index if not exists (\w+)/i)
-        if (match) {
-          indexes.add(match[1])
-        }
-        return { rowsWritten: 0, [Symbol.iterator]: () => [][Symbol.iterator]() }
-      }
-
-      // INSERT with ON CONFLICT (upsert)
-      if (normalizedQuery.startsWith('insert into entries')) {
-        const table = tables.get('entries')!
-        const [namespace, name, hexId, locationHint, createdAt, lastAccessedAt, metadata] = params as [
-          string, string, string, string, number, number, string | null
-        ]
-        const key = `${namespace}:${name}`
-        const existing = table.get(key)
-
-        if (existing && normalizedQuery.includes('on conflict')) {
-          // Update existing entry (upsert)
-          table.set(key, {
-            namespace,
-            name,
-            hex_id: hexId,
-            location_hint: locationHint,
-            created_at: existing.created_at, // Keep original created_at
-            last_accessed_at: lastAccessedAt,
-            metadata,
-          })
-        } else {
-          // Insert new entry
-          table.set(key, {
-            namespace,
-            name,
-            hex_id: hexId,
-            location_hint: locationHint,
-            created_at: createdAt,
-            last_accessed_at: lastAccessedAt,
-            metadata,
-          })
-        }
-        return { rowsWritten: 1, [Symbol.iterator]: () => [][Symbol.iterator]() }
-      }
-
-      // SELECT with WHERE namespace and name
-      if (normalizedQuery.startsWith('select') && normalizedQuery.includes('where namespace = ?')) {
-        const table = tables.get('entries')!
-        const [namespace, name] = params as [string, string]
-        const key = `${namespace}:${name}`
-        const row = table.get(key)
-        const results = row ? [row as T] : []
-        return { rowsWritten: 0, [Symbol.iterator]: () => results[Symbol.iterator]() }
-      }
-
-      // UPDATE for access time
-      if (normalizedQuery.startsWith('update entries') && normalizedQuery.includes('set last_accessed_at')) {
-        const table = tables.get('entries')!
-        const [accessedAt, namespace, name] = params as [number, string, string]
-        const key = `${namespace}:${name}`
-        const existing = table.get(key)
-        if (existing) {
-          table.set(key, { ...existing, last_accessed_at: accessedAt })
-          return { rowsWritten: 1, [Symbol.iterator]: () => [][Symbol.iterator]() }
-        }
-        return { rowsWritten: 0, [Symbol.iterator]: () => [][Symbol.iterator]() }
-      }
-
-      // SELECT COUNT(*)
-      if (normalizedQuery.includes('select count(*)') && !normalizedQuery.includes('group by')) {
-        const table = tables.get('entries')!
-        const count = table.size
-        return { rowsWritten: 0, [Symbol.iterator]: () => [{ count } as T][Symbol.iterator]() }
-      }
-
-      // SELECT with GROUP BY namespace
-      if (normalizedQuery.includes('group by namespace')) {
-        const table = tables.get('entries')!
-        const counts = new Map<string, number>()
-        for (const row of table.values()) {
-          const ns = row.namespace as string
-          counts.set(ns, (counts.get(ns) ?? 0) + 1)
-        }
-        const results = Array.from(counts.entries()).map(([namespace, count]) => ({
-          namespace,
-          count,
-        })) as T[]
-        return { rowsWritten: 0, [Symbol.iterator]: () => results[Symbol.iterator]() }
-      }
-
-      return { rowsWritten: 0, [Symbol.iterator]: () => [][Symbol.iterator]() }
-    },
-  }
+  // Create a new in-memory SQLite database
+  currentDb = new SQL.Database()
+  const mockSql = new MockSqlStorage(currentDb)
 
   return {
     id: { toString: () => 'test-id', equals: () => false, name: 'test' },
     storage: {
-      sql,
+      sql: mockSql,
       get: vi.fn(),
       put: vi.fn(),
       delete: vi.fn(),
@@ -745,6 +731,19 @@ function createMockState(): DurableObjectState {
   } as unknown as DurableObjectState
 }
 
+// Initialize sql.js before all tests
+beforeAll(async () => {
+  SQL = await initSqlJs()
+})
+
+// Clean up database after each test
+afterEach(() => {
+  if (currentDb) {
+    currentDb.close()
+    currentDb = null
+  }
+})
+
 describe('DORegistryDO (L2 Index)', () => {
   let state: DurableObjectState
   let registryDO: DORegistryDO
@@ -769,7 +768,7 @@ describe('DORegistryDO (L2 Index)', () => {
         namespace: 'MY_DO',
         name: 'user-123',
         hexId: 'abc123def456',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
         metadata: { tier: 'premium' },
@@ -791,7 +790,7 @@ describe('DORegistryDO (L2 Index)', () => {
       expect(result.name).toBe('user-123')
       expect(result.namespace).toBe('MY_DO')
       expect(result.hexId).toBe('abc123def456')
-      expect(result.locationHint).toBe('enam')
+      expect(result.colo).toBe('enam')
       expect(result.metadata).toEqual({ tier: 'premium' })
     })
 
@@ -800,7 +799,7 @@ describe('DORegistryDO (L2 Index)', () => {
         namespace: 'MY_DO',
         name: 'user/with/slashes',
         hexId: 'abc123',
-        locationHint: 'weur',
+        colo: 'weur',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
       }
@@ -828,7 +827,7 @@ describe('DORegistryDO (L2 Index)', () => {
         namespace: 'POSTGRES_DO',
         name: 'tenant-abc',
         hexId: 'deadbeef1234',
-        locationHint: 'apac',
+        colo: 'apac',
         createdAt: 2000000,
         lastAccessedAt: 2000000,
         metadata: { plan: 'enterprise' },
@@ -861,7 +860,7 @@ describe('DORegistryDO (L2 Index)', () => {
         namespace: 'MY_DO',
         name: 'instance-1',
         hexId: 'original-hex',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
       }
@@ -872,12 +871,12 @@ describe('DORegistryDO (L2 Index)', () => {
         body: JSON.stringify(entry1),
       }))
 
-      // Update with new hexId and locationHint
+      // Update with new hexId and colo
       const entry2: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'instance-1',
         hexId: 'updated-hex',
-        locationHint: 'weur',
+        colo: 'weur',
         createdAt: 2000000, // This should be ignored (keep original)
         lastAccessedAt: 3000000,
         metadata: { updated: true },
@@ -898,7 +897,7 @@ describe('DORegistryDO (L2 Index)', () => {
       const result = await lookupResponse.json<DORegistryEntry>()
 
       expect(result.hexId).toBe('updated-hex')
-      expect(result.locationHint).toBe('weur')
+      expect(result.colo).toBe('weur')
       expect(result.createdAt).toBe(1000000) // Original preserved
       expect(result.lastAccessedAt).toBe(3000000)
       expect(result.metadata).toEqual({ updated: true })
@@ -912,7 +911,7 @@ describe('DORegistryDO (L2 Index)', () => {
         namespace: 'MY_DO',
         name: 'access-test',
         hexId: 'hex123',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
       }
@@ -971,9 +970,9 @@ describe('DORegistryDO (L2 Index)', () => {
     it('should return correct counts', async () => {
       // Create entries in different namespaces
       const entries = [
-        { namespace: 'DO_A', name: 'a1', hexId: 'hex1', locationHint: 'enam', createdAt: 1, lastAccessedAt: 1 },
-        { namespace: 'DO_A', name: 'a2', hexId: 'hex2', locationHint: 'enam', createdAt: 2, lastAccessedAt: 2 },
-        { namespace: 'DO_B', name: 'b1', hexId: 'hex3', locationHint: 'weur', createdAt: 3, lastAccessedAt: 3 },
+        { namespace: 'DO_A', name: 'a1', hexId: 'hex1', colo: 'enam', createdAt: 1, lastAccessedAt: 1 },
+        { namespace: 'DO_A', name: 'a2', hexId: 'hex2', colo: 'enam', createdAt: 2, lastAccessedAt: 2 },
+        { namespace: 'DO_B', name: 'b1', hexId: 'hex3', colo: 'weur', createdAt: 3, lastAccessedAt: 3 },
       ]
 
       for (const entry of entries) {
@@ -1120,7 +1119,7 @@ describe('createDORegistry', () => {
         name: 'cached-do',
         hexId: 'cached-hex-id-123',
         namespace: 'default',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1160,7 +1159,7 @@ describe('createDORegistry', () => {
         name: 'indexed-do',
         hexId: 'indexed-hex-id-456',
         namespace: 'default',
-        locationHint: 'weur',
+        colo: 'weur',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1241,7 +1240,7 @@ describe('createDORegistry', () => {
         name: 'l1-hit',
         hexId: 'l1-hex-id',
         namespace: 'default',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1273,7 +1272,7 @@ describe('createDORegistry', () => {
         name: 'l2-hit',
         hexId: 'l2-hex-id',
         namespace: 'default',
-        locationHint: 'apac',
+        colo: 'apac',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1321,7 +1320,7 @@ describe('createDORegistry', () => {
         name: 'register-test',
         hexId: 'register-hex-id',
         namespace: 'default',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1342,7 +1341,7 @@ describe('createDORegistry', () => {
         name: 'register-l2-test',
         hexId: 'register-l2-hex-id',
         namespace: 'default',
-        locationHint: 'weur',
+        colo: 'weur',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
@@ -1429,7 +1428,7 @@ describe('createDORegistry', () => {
         name: 'cached',
         hexId: 'cached-hex',
         namespace: 'default',
-        locationHint: 'enam',
+        colo: 'enam',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }
