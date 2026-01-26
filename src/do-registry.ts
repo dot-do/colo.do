@@ -335,6 +335,16 @@ export async function invalidateDORegistryCache(
 // ============================================================================
 
 /**
+ * Options for getStub and getStubWithResult methods
+ */
+export interface DORegistryGetOptions {
+  /** Request object to extract colo from request.cf.colo */
+  request?: Request
+  /** Explicit location hint (overrides request-based detection) */
+  locationHint?: string
+}
+
+/**
  * DORegistryDO - Durable Object for L2 storage
  *
  * Stores name->hexId mappings in SQLite for fast regional lookups.
@@ -373,9 +383,10 @@ export interface DORegistry {
    *
    * @param name - Logical name for the DO instance
    * @param ctx - Optional ExecutionContext for background registration
+   * @param options - Optional options including request or locationHint for new DOs
    * @returns The DurableObjectStub ready for .fetch() calls
    */
-  getStub(name: string, ctx?: ExecutionContext): Promise<DurableObjectStub>
+  getStub(name: string, ctx?: ExecutionContext, options?: DORegistryGetOptions): Promise<DurableObjectStub>
 
   /**
    * Get a DO stub with detailed result information.
@@ -385,11 +396,13 @@ export interface DORegistry {
    *
    * @param name - Logical name for the DO instance
    * @param ctx - Optional ExecutionContext for background registration
+   * @param options - Optional options including request or locationHint for new DOs
    * @returns Object containing stub, entry, tier, and latency
    */
   getStubWithResult(
     name: string,
-    ctx?: ExecutionContext
+    ctx?: ExecutionContext,
+    options?: DORegistryGetOptions
   ): Promise<{
     stub: DurableObjectStub
     entry: DORegistryEntry
@@ -449,7 +462,8 @@ export interface DORegistry {
  *     })
  *
  *     // Fast lookup (~5ms vs ~157ms)
- *     const stub = await registry.getStub('user-123', ctx)
+ *     // Pass request so new DOs get the correct locationHint from request.cf.colo
+ *     const stub = await registry.getStub('user-123', ctx, { request })
  *     return stub.fetch(request)
  *   }
  * }
@@ -537,9 +551,30 @@ export function createDORegistry(
   }
 
   /**
+   * Determine location hint from options
+   */
+  function getLocationHintFromOptions(options?: DORegistryGetOptions): string | undefined {
+    // Explicit locationHint takes precedence
+    if (options?.locationHint) {
+      return options.locationHint
+    }
+
+    // Try to extract from request
+    if (options?.request) {
+      const cf = getCfFromRequest(options.request)
+      if (cf?.colo) {
+        return getRegionForColo(cf.colo)
+      }
+    }
+
+    // Return undefined - let the caller decide on a default or omit it
+    return undefined
+  }
+
+  /**
    * Create a new DO via L3 (newUniqueId)
    */
-  function createViaL3(name: string): { id: DurableObjectId; entry: DORegistryEntry } {
+  function createViaL3(name: string, locationHint?: string): { id: DurableObjectId; entry: DORegistryEntry } {
     const id = targetNamespace.newUniqueId()
     const now = Date.now()
 
@@ -547,7 +582,8 @@ export function createDORegistry(
       name,
       hexId: id.toString(),
       namespace,
-      locationHint: 'enam', // Default location hint, can be overridden
+      // Only set locationHint if we actually know it
+      locationHint: locationHint ?? 'unknown',
       createdAt: now,
       lastAccessedAt: now,
     }
@@ -556,14 +592,15 @@ export function createDORegistry(
   }
 
   return {
-    async getStub(name: string, ctx?: ExecutionContext): Promise<DurableObjectStub> {
-      const result = await this.getStubWithResult(name, ctx)
+    async getStub(name: string, ctx?: ExecutionContext, options?: DORegistryGetOptions): Promise<DurableObjectStub> {
+      const result = await this.getStubWithResult(name, ctx, options)
       return result.stub
     },
 
     async getStubWithResult(
       name: string,
-      ctx?: ExecutionContext
+      ctx?: ExecutionContext,
+      options?: DORegistryGetOptions
     ): Promise<{
       stub: DurableObjectStub
       entry: DORegistryEntry
@@ -618,7 +655,9 @@ export function createDORegistry(
       stats.l3CreationFallbacks++
       stats.hitRate = calculateHitRate()
 
-      const { id, entry } = createViaL3(name)
+      // Determine location hint from request or options
+      const locationHint = getLocationHintFromOptions(options)
+      const { id, entry } = createViaL3(name, locationHint)
       const stub = targetNamespace.get(id)
 
       // Register in background

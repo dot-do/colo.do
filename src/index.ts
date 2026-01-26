@@ -153,4 +153,5 @@ export {
   type DORegistryConfig,
   type DORegistryStats,
   type DORegistryEnv,
+  type DORegistryGetOptions,
 } from './do-registry.js'
