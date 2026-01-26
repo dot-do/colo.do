@@ -20,6 +20,7 @@ import {
   getColosByRegion,
   getDOColos,
 } from './colos.js'
+import { isValidRegion } from './validation.js'
 import {
   getLocation,
   sortByDistance,
@@ -81,7 +82,16 @@ export default {
         let colos = Object.values(COLOS)
 
         if (region) {
-          colos = getColosByRegion(region as any)
+          if (!isValidRegion(region)) {
+            return json(
+              {
+                error: `Invalid region: ${region}. Valid regions are: wnam, enam, weur, eeur, apac, oc, sam, afr, me`,
+              },
+              corsHeaders,
+              400
+            )
+          }
+          colos = getColosByRegion(region)
         }
         if (doOnly) {
           colos = colos.filter(c => c.hasDO)

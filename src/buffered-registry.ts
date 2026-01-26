@@ -14,6 +14,7 @@
  */
 
 import type { RegistryEntry, CreateOptions } from './registry.js'
+import { LRUCache } from './lru-cache.js'
 
 // ============================================================================
 // Types
@@ -370,9 +371,9 @@ export interface BufferedEnvOptions {
 }
 
 /**
- * Snapshot cache (worker-level)
+ * Snapshot cache (worker-level, LRU eviction at 50 entries)
  */
-const snapshotCache = new Map<string, { entries: Map<string, RegistryEntry>; fetchedAt: number }>()
+const bufferedSnapshotCache = new LRUCache<string, { entries: Map<string, RegistryEntry>; fetchedAt: number }>(50)
 
 /**
  * Create a buffered, sharded environment wrapper
@@ -418,7 +419,7 @@ export function createBufferedEnv<Env extends Record<string, unknown>>(
 
   // Helper to get cached snapshot
   const getCachedEntry = async (namespace: string, name: string): Promise<RegistryEntry | null> => {
-    const cached = snapshotCache.get(namespace)
+    const cached = bufferedSnapshotCache.get(namespace)
     if (cached && Date.now() - cached.fetchedAt < cacheTtl) {
       return cached.entries.get(name) ?? null
     }
@@ -430,7 +431,7 @@ export function createBufferedEnv<Env extends Record<string, unknown>>(
 
     const snapshot = await object.json<{ entries: RegistryEntry[] }>()
     const entriesMap = new Map(snapshot.entries.map(e => [e.name, e]))
-    snapshotCache.set(namespace, { entries: entriesMap, fetchedAt: Date.now() })
+    bufferedSnapshotCache.set(namespace, { entries: entriesMap, fetchedAt: Date.now() })
 
     return entriesMap.get(name) ?? null
   }

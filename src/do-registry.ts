@@ -71,6 +71,19 @@
  * @module fast-registry
  */
 
+import { getRegionForColo } from './postgres-index.js'
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Extract cf properties from a request
+ */
+function getCfFromRequest(request: Request): IncomingRequestCfProperties | undefined {
+  return (request as unknown as { cf?: IncomingRequestCfProperties }).cf
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -168,7 +181,6 @@ export const DEFAULT_FAST_REGISTRY_CONFIG: Required<DORegistryConfig> = {
  */
 export function getCache(): Cache {
   // In Cloudflare Workers, caches.default is the global cache
-  // @ts-ignore - caches is a global in Cloudflare Workers
   return caches.default
 }
 

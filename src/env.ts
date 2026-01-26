@@ -24,6 +24,7 @@
  */
 
 import type { RegistryEntry, CreateOptions, GetOptions, RegistrySnapshot } from './registry.js'
+import { LRUCache } from './lru-cache.js'
 
 // ============================================================================
 // Types
@@ -148,9 +149,9 @@ export interface WrappedEnv {
 // ============================================================================
 
 /**
- * In-memory cache for registry snapshots
+ * In-memory cache for registry snapshots (LRU eviction at 50 entries)
  */
-const snapshotCache = new Map<string, { snapshot: RegistrySnapshot; fetchedAt: number }>()
+const envSnapshotCache = new LRUCache<string, { snapshot: RegistrySnapshot; fetchedAt: number }>(50)
 
 /**
  * Get a cached snapshot from R2
@@ -162,7 +163,7 @@ async function getSnapshot(
 ): Promise<RegistrySnapshot | null> {
   // Check in-memory cache
   const cacheKey = namespace
-  const cached = snapshotCache.get(cacheKey)
+  const cached = envSnapshotCache.get(cacheKey)
   if (cached && Date.now() - cached.fetchedAt < cacheTtl) {
     return cached.snapshot
   }
@@ -174,7 +175,7 @@ async function getSnapshot(
   if (!object) return null
 
   const snapshot = await object.json<RegistrySnapshot>()
-  snapshotCache.set(cacheKey, { snapshot, fetchedAt: Date.now() })
+  envSnapshotCache.set(cacheKey, { snapshot, fetchedAt: Date.now() })
 
   return snapshot
 }
@@ -361,7 +362,7 @@ export function wrapEnv<Env extends Record<string, unknown>>(
     get(_, namespace: string) {
       return async (name: string): Promise<boolean> => {
         // Invalidate cache
-        snapshotCache.delete(namespace)
+        envSnapshotCache.delete(namespace)
 
         return callRegistry<boolean>(registry, 'delete', namespace, name)
       }
@@ -374,7 +375,7 @@ export function wrapEnv<Env extends Record<string, unknown>>(
         const ns = getNamespace(namespace)
 
         // Invalidate cache
-        snapshotCache.delete(namespace)
+        envSnapshotCache.delete(namespace)
 
         const entry = await callRegistry<RegistryEntry>(
           registry,
@@ -414,12 +415,12 @@ export function wrapEnv<Env extends Record<string, unknown>>(
  * Call this after making changes via the registry
  */
 export function invalidateCache(namespace: string): void {
-  snapshotCache.delete(namespace)
+  envSnapshotCache.delete(namespace)
 }
 
 /**
  * Clear the entire snapshot cache
  */
 export function clearCache(): void {
-  snapshotCache.clear()
+  envSnapshotCache.clear()
 }

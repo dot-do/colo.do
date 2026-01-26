@@ -134,7 +134,6 @@ const DEFAULT_CONFIG: Required<Omit<PostgresIndexConfig, 'cacheKeyPrefix'>> & { 
  * Get the cache instance
  */
 function getCache(): Cache {
-  // @ts-ignore - caches is a global in Workers
   return caches.default
 }
 

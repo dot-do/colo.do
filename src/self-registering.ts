@@ -325,6 +325,15 @@ export abstract class SelfRegisteringDO extends RpcTarget implements DurableObje
  * })
  * ```
  */
+/**
+ * Interface for accessing DO context from base class.
+ * Used by the mixin pattern to safely access ctx and env.
+ */
+interface DOWithContext {
+  ctx: DurableObjectState
+  env: Record<string, unknown>
+}
+
 export function withSelfRegistration<T extends new (...args: any[]) => DurableObject>(
   BaseClass: T,
   config: RegistrationConfig
@@ -339,9 +348,8 @@ export function withSelfRegistration<T extends new (...args: any[]) => DurableOb
       const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
       this._sr_colo = cf?.colo ?? null
 
-      // Attempt registration
-      const ctx = (this as any).ctx as DurableObjectState
-      const env = (this as any).env as Record<string, unknown>
+      // Attempt registration - access ctx/env from base class via interface cast
+      const { ctx, env } = this as unknown as DOWithContext
 
       if (!this._sr_registrationState) {
         this._sr_registrationState = await ctx.storage.get<RegistrationState>(REGISTRATION_KEY) ?? { registered: false, attempts: 0 }
@@ -356,8 +364,7 @@ export function withSelfRegistration<T extends new (...args: any[]) => DurableOb
     }
 
     async alarm(): Promise<void> {
-      const ctx = (this as any).ctx as DurableObjectState
-      const env = (this as any).env as Record<string, unknown>
+      const { ctx, env } = this as unknown as DOWithContext
 
       // Retry registration
       if (!this._sr_registrationState?.registered) {

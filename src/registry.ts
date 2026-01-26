@@ -513,7 +513,14 @@ export class RegistryDO extends RpcTarget implements DurableObject {
    */
   async alarm(): Promise<void> {
     this.pendingFlush = false
-    await this.flushAllNamespaces()
+    try {
+      await this.flushAllNamespaces()
+    } catch (error) {
+      // Log error but don't rethrow - alarm errors can cause issues
+      console.error('RegistryDO alarm error:', error instanceof Error ? error.message : String(error))
+      // Re-schedule alarm to retry later
+      this.state.storage.setAlarm(Date.now() + this.flushDebounceMs * 2)
+    }
   }
 
   /**

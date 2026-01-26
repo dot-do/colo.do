@@ -80,7 +80,6 @@ const DEFAULT_CACHE_CONFIG: CacheConfig = {
  * Note: In Workers, we use the default cache
  */
 function getCache(): Cache {
-  // @ts-ignore - caches is a global in Workers
   return caches.default
 }
 
