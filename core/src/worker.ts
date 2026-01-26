@@ -29,6 +29,9 @@ import {
   estimateLatency,
 } from './location.js'
 
+// Re-export DORegistryDO for wrangler DO binding
+export { DORegistryDO } from './do-registry.js'
+
 export interface Env {
   // Optional: A DO namespace for testing colo placement
   COLO_DO?: DurableObjectNamespace

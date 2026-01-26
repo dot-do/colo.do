@@ -1,14 +1,9 @@
-name = "colo-do"
-main = "core/src/worker.ts"
+name = "colo-core-test"
+main = "src/worker.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Routes
-routes = [
-  { pattern = "colo.do", custom_domain = true }
-]
-
-# Durable Objects
+# Durable Objects for testing
 [durable_objects]
 bindings = [
   { name = "COLO_DO", class_name = "ColoDO" },
