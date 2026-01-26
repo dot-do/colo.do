@@ -753,6 +753,21 @@ export class DORegistryDO implements DurableObject {
     const url = new URL(request.url)
     const path = url.pathname
 
+    // GET / - Return all COLO entries with id and colo
+    if ((path === '/' || path === '') && request.method === 'GET') {
+      const entries = this.entries.list().filter(e => e.namespace === 'COLO')
+      const colos = entries.map(e => ({
+        name: e.name,
+        id: e.id,
+        colo: e.colo,
+        city: (e.metadata as Record<string, unknown>)?.city || e.name,
+        discoveredAt: (e.metadata as Record<string, unknown>)?.discoveredAt,
+      }))
+      // Sort by colo name
+      colos.sort((a, b) => a.colo.localeCompare(b.colo))
+      return Response.json({ colos, total: colos.length })
+    }
+
     // GET /lookup/{namespace}/{name}
     if (path.startsWith('/lookup/') && request.method === 'GET') {
       return this.handleLookup(path)
