@@ -54,7 +54,7 @@ export interface CreateInColoResult {
   /** Full DO name (format: {colo}:{name}) */
   name: string
   /** The hex ID string for idFromString() */
-  hexId: string
+  id: string
   /** Target colo IATA */
   colo: string
   /** Region hint used */
@@ -223,11 +223,11 @@ export class ColoServiceDO implements DurableObject {
 
     // Generate a deterministic hex ID from the name
     // This allows idFromString() to work consistently
-    const hexId = this.nameToHexId(fullName)
+    const id = this.nameToHexId(fullName)
 
     return {
       name: fullName,
-      hexId,
+      id,
       colo: normalizedColo,
       region: coloInfo.region,
       created: true,

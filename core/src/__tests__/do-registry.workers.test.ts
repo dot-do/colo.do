@@ -28,7 +28,7 @@ import {
 
 const sampleEntry: DORegistryEntry = {
   name: 'my-database',
-  hexId: 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890',
+  id: 'a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890',
   namespace: 'POSTGRES_DO',
   colo: 'IAD',
   createdAt: Date.now(),
@@ -52,7 +52,7 @@ describe('DORegistry Types', () => {
     it('should have required fields', () => {
       const entry: DORegistryEntry = {
         name: 'test-do',
-        hexId: 'abc123',
+        id: 'abc123',
         namespace: 'MY_DO',
         colo: 'IAD',
         createdAt: Date.now(),
@@ -60,7 +60,7 @@ describe('DORegistry Types', () => {
       }
 
       expect(entry.name).toBe('test-do')
-      expect(entry.hexId).toBe('abc123')
+      expect(entry.id).toBe('abc123')
       expect(entry.namespace).toBe('MY_DO')
       expect(entry.colo).toBe('IAD')
       expect(typeof entry.createdAt).toBe('number')
@@ -70,7 +70,7 @@ describe('DORegistry Types', () => {
     it('should support optional metadata', () => {
       const entry: DORegistryEntry = {
         name: 'test-do',
-        hexId: 'abc123',
+        id: 'abc123',
         namespace: 'MY_DO',
         colo: 'IAD',
         createdAt: Date.now(),
@@ -84,7 +84,7 @@ describe('DORegistry Types', () => {
     it('should support optional locationHint', () => {
       const entry: DORegistryEntry = {
         name: 'test-do',
-        hexId: 'abc123',
+        id: 'abc123',
         namespace: 'MY_DO',
         colo: 'IAD',
         createdAt: Date.now(),
@@ -202,7 +202,7 @@ describe('L1 Cache API', () => {
       // Verify by looking up
       const cached = await lookupFromCache(defaultConfig, entry.namespace, entry.name)
       expect(cached).not.toBeNull()
-      expect(cached?.hexId).toBe(entry.hexId)
+      expect(cached?.id).toBe(entry.id)
     })
   })
 
@@ -219,7 +219,7 @@ describe('L1 Cache API', () => {
       const cached = await lookupFromCache(defaultConfig, entry.namespace, entry.name)
       expect(cached).not.toBeNull()
       expect(cached?.name).toBe(entry.name)
-      expect(cached?.hexId).toBe(entry.hexId)
+      expect(cached?.id).toBe(entry.id)
       expect(cached?.colo).toBe(entry.colo)
     })
   })
@@ -270,7 +270,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'user-123',
-        hexId: 'abc123def456',
+        id: 'abc123def456',
         colo: 'IAD',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
@@ -290,7 +290,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const result = await response.json<DORegistryEntry>()
       expect(result.name).toBe('user-123')
       expect(result.namespace).toBe('MY_DO')
-      expect(result.hexId).toBe('abc123def456')
+      expect(result.id).toBe('abc123def456')
       expect(result.colo).toBe('IAD')
       expect(result.metadata).toEqual({ tier: 'premium' })
     })
@@ -301,7 +301,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'user/with/slashes',
-        hexId: 'encoded123',
+        id: 'encoded123',
         colo: 'LAX',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
@@ -330,7 +330,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'new-entry',
-        hexId: 'new123',
+        id: 'new123',
         colo: 'ORD',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
@@ -358,7 +358,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const originalEntry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'upsert-entry',
-        hexId: 'original-hex',
+        id: 'original-hex',
         colo: 'IAD',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
@@ -375,7 +375,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const updatedEntry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'upsert-entry',
-        hexId: 'updated-hex',
+        id: 'updated-hex',
         colo: 'LAX',
         createdAt: 2000000, // Different createdAt
         lastAccessedAt: 3000000,
@@ -392,7 +392,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const response = await stub.fetch('https://internal/lookup/MY_DO/upsert-entry')
       const result = await response.json<DORegistryEntry>()
 
-      expect(result.hexId).toBe('updated-hex')
+      expect(result.id).toBe('updated-hex')
       expect(result.colo).toBe('LAX')
       expect(result.createdAt).toBe(1000000) // Original preserved
       expect(result.lastAccessedAt).toBe(3000000)
@@ -408,7 +408,7 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
       const entry: DORegistryEntry = {
         namespace: 'MY_DO',
         name: 'access-entry',
-        hexId: 'access123',
+        id: 'access123',
         colo: 'IAD',
         createdAt: 1000000,
         lastAccessedAt: 1000000,
@@ -462,9 +462,9 @@ describe('DORegistryDO (L2 Index) - Real DO', () => {
 
       // Add multiple entries
       const entries: DORegistryEntry[] = [
-        { namespace: 'NS1', name: 'entry1', hexId: 'hex1', colo: 'IAD', createdAt: Date.now(), lastAccessedAt: Date.now() },
-        { namespace: 'NS1', name: 'entry2', hexId: 'hex2', colo: 'LAX', createdAt: Date.now(), lastAccessedAt: Date.now() },
-        { namespace: 'NS2', name: 'entry3', hexId: 'hex3', colo: 'ORD', createdAt: Date.now(), lastAccessedAt: Date.now() },
+        { namespace: 'NS1', name: 'entry1', id: 'hex1', colo: 'IAD', createdAt: Date.now(), lastAccessedAt: Date.now() },
+        { namespace: 'NS1', name: 'entry2', id: 'hex2', colo: 'LAX', createdAt: Date.now(), lastAccessedAt: Date.now() },
+        { namespace: 'NS2', name: 'entry3', id: 'hex3', colo: 'ORD', createdAt: Date.now(), lastAccessedAt: Date.now() },
       ]
 
       for (const entry of entries) {

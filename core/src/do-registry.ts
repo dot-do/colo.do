@@ -29,7 +29,7 @@
  * - Default TTL: 30s fresh, 300s stale
  *
  * **L2 Index DO** - Regional, SQLite-backed
- * - Authoritative store for name->hexId mappings
+ * - Authoritative store for name->id mappings
  * - Accessed on L1 cache miss
  * - Populates L1 cache on response
  *
@@ -51,7 +51,7 @@
  *     // Fast lookup (~5ms vs ~157ms)
  *     const entry = await registry.lookup('MY_DO', 'user-123', ctx)
  *     if (entry) {
- *       const id = env.MY_DO.idFromString(entry.hexId)
+ *       const id = env.MY_DO.idFromString(entry.id)
  *       return env.MY_DO.get(id).fetch(request)
  *     }
  *
@@ -60,7 +60,7 @@
  *     ctx.waitUntil(registry.register({
  *       namespace: 'MY_DO',
  *       name: 'user-123',
- *       hexId: id.toString(),
+ *       id: id.toString(),
  *       colo: request.cf.colo, // IATA code: IAD, LAX, ORD, etc.
  *     }))
  *     return env.MY_DO.get(id).fetch(request)
@@ -95,7 +95,7 @@ export interface DORegistryEntry {
   /** Logical name (user-provided identifier) */
   name: string
   /** DO ID hex string from id.toString() - used with idFromString() */
-  hexId: string
+  id: string
   /** DO class namespace name (e.g., 'MY_DO') */
   namespace: string
   /** IATA colo code where DO was created (IAD, LAX, ORD, LHR, etc.) */
@@ -356,7 +356,7 @@ export interface DORegistryGetOptions {
 /**
  * DORegistryDO - Durable Object for L2 storage
  *
- * Stores name->hexId mappings in SQLite for fast regional lookups.
+ * Stores name->id mappings in SQLite for fast regional lookups.
  * Used when L1 Cache misses.
  *
  * Endpoints:
@@ -386,8 +386,8 @@ export interface DORegistry {
   /**
    * Get a DO stub by name using the L1→L2→L3 lookup chain.
    *
-   * - L1 hit: Returns cached entry, uses idFromString(hexId) (~1-5ms)
-   * - L2 hit: Returns indexed entry, caches it, uses idFromString(hexId) (~5-20ms)
+   * - L1 hit: Returns cached entry, uses idFromString(id) (~1-5ms)
+   * - L2 hit: Returns indexed entry, caches it, uses idFromString(id) (~5-20ms)
    * - L3 fallback: Creates new DO with newUniqueId(), registers in background (~50-100ms)
    *
    * @param name - Logical name for the DO instance
@@ -591,7 +591,7 @@ export function createDORegistry(
 
     const entry: DORegistryEntry = {
       name,
-      hexId: id.toString(),
+      id: id.toString(),
       namespace,
       colo: colo ?? 'UNKNOWN', // IATA code where DO was created
       createdAt: now,
@@ -625,7 +625,7 @@ export function createDORegistry(
         stats.l1CacheHits++
         stats.hitRate = calculateHitRate()
 
-        const id = targetNamespace.idFromString(cachedEntry.hexId)
+        const id = targetNamespace.idFromString(cachedEntry.id)
         const stub = targetNamespace.get(id)
 
         return {
@@ -650,7 +650,7 @@ export function createDORegistry(
           cacheEntry(mergedConfig, indexedEntry).catch(() => {})
         }
 
-        const id = targetNamespace.idFromString(indexedEntry.hexId)
+        const id = targetNamespace.idFromString(indexedEntry.id)
         const stub = targetNamespace.get(id)
 
         return {
@@ -719,7 +719,7 @@ function buildEntryKey(namespace: string, name: string): string {
 /**
  * DORegistryDO - Durable Object for L2 storage using @dotdo/collections
  *
- * Stores name->hexId mappings using collections for MongoDB-style queries.
+ * Stores name->id mappings using collections for MongoDB-style queries.
  * Used when L1 Cache misses. Provides significant cost savings over raw SQL
  * through efficient JSON storage and indexing.
  *
