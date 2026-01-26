@@ -775,6 +775,20 @@ export class DORegistryDO implements DurableObject {
       return this.handleStats()
     }
 
+    // GET /list - List all entries (with optional filters)
+    if (path === '/list' && request.method === 'GET') {
+      const namespace = url.searchParams.get('namespace')
+      const colo = url.searchParams.get('colo')
+      const limit = parseInt(url.searchParams.get('limit') || '100', 10)
+      const offset = parseInt(url.searchParams.get('offset') || '0', 10)
+      return this.handleList(namespace, colo, limit, offset)
+    }
+
+    // DELETE /entry/{namespace}/{name} - Delete an entry
+    if (path.startsWith('/entry/') && request.method === 'DELETE') {
+      return this.handleDelete(path)
+    }
+
     return new Response('Not Found', { status: 404 })
   }
 
@@ -853,13 +867,79 @@ export class DORegistryDO implements DurableObject {
 
     // Count by namespace
     const byNamespace: Record<string, number> = {}
+    // Count by colo
+    const byColo: Record<string, number> = {}
     for (const entry of allEntries) {
       byNamespace[entry.namespace] = (byNamespace[entry.namespace] || 0) + 1
+      byColo[entry.colo] = (byColo[entry.colo] || 0) + 1
     }
 
     return Response.json({
       totalEntries,
       byNamespace,
+      byColo,
     })
+  }
+
+  /**
+   * Handle GET /list
+   *
+   * Lists all entries with optional filtering by namespace or colo.
+   */
+  private handleList(
+    namespace: string | null,
+    colo: string | null,
+    limit: number,
+    offset: number
+  ): Response {
+    let entries = this.entries.list()
+
+    // Apply filters
+    if (namespace) {
+      entries = entries.filter(e => e.namespace === namespace)
+    }
+    if (colo) {
+      entries = entries.filter(e => e.colo.toUpperCase() === colo.toUpperCase())
+    }
+
+    // Sort by lastAccessedAt descending (most recent first)
+    entries.sort((a, b) => b.lastAccessedAt - a.lastAccessedAt)
+
+    // Apply pagination
+    const total = entries.length
+    const paginated = entries.slice(offset, offset + limit)
+
+    return Response.json({
+      entries: paginated,
+      total,
+      limit,
+      offset,
+      hasMore: offset + limit < total,
+    })
+  }
+
+  /**
+   * Handle DELETE /entry/{namespace}/{name}
+   *
+   * Deletes an entry from the registry.
+   */
+  private handleDelete(path: string): Response {
+    // Path format: /entry/{namespace}/{name}
+    const pathParts = path.slice('/entry/'.length).split('/')
+    if (pathParts.length < 2) {
+      return new Response('Bad Request: path must be /entry/{namespace}/{name}', { status: 400 })
+    }
+
+    const namespace = decodeURIComponent(pathParts[0])
+    const name = decodeURIComponent(pathParts.slice(1).join('/'))
+    const key = buildEntryKey(namespace, name)
+
+    const existing = this.entries.get(key)
+    if (!existing) {
+      return Response.json({ ok: false, error: 'Not found' }, { status: 404 })
+    }
+
+    this.entries.delete(key)
+    return Response.json({ ok: true, deleted: existing })
   }
 }

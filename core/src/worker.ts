@@ -42,6 +42,8 @@ export interface Env {
   COLO_DO?: DurableObjectNamespace
   // Optional: Colo Service DO for programmatic DO management
   COLO_SERVICE?: DurableObjectNamespace
+  // Optional: DO Registry for fast ID lookups
+  DO_REGISTRY?: DurableObjectNamespace
 }
 
 /**
@@ -316,6 +318,41 @@ export default {
           distance,
           latency,
         }, corsHeaders)
+      }
+
+      // DO Registry API - view registered DOs and their IDs
+      // Format: /registry/*
+      // - GET /registry/list - List all entries
+      // - GET /registry/stats - Get registry statistics
+      // - GET /registry/lookup/{namespace}/{name} - Lookup specific entry
+      // - DELETE /registry/entry/{namespace}/{name} - Delete an entry
+      if (path.startsWith('/registry') && env.DO_REGISTRY) {
+        const registryId = env.DO_REGISTRY.idFromName('index')
+        const stub = env.DO_REGISTRY.get(registryId)
+
+        const registryPath = path.replace('/registry', '') || '/'
+        const forwardUrl = new URL(request.url)
+        forwardUrl.pathname = registryPath
+
+        const forwardRequest = new Request(forwardUrl.toString(), {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        })
+
+        const response = await stub.fetch(forwardRequest)
+
+        // Add CORS headers
+        const newHeaders = new Headers(response.headers)
+        for (const [key, value] of Object.entries(corsHeaders)) {
+          newHeaders.set(key, value)
+        }
+
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders,
+        })
       }
 
       // Colo Service API - programmatic DO management
