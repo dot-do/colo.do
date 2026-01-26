@@ -268,7 +268,12 @@ export default {
 
       // Find location info
       const workerLocation = locations.find(loc => loc.iata === workerColo) || null
-      const durableLocation = locations.find(loc => loc.iata === (colo?.toUpperCase() || doColo)) || null
+      const durableLocation = locations.find(loc => loc.iata === doColo) || null
+      const requestedLocation = locations.find(loc => loc.iata === targetColo) || null
+
+      // Check if DO is running where we requested (auto-discovery)
+      const coloMatch = targetColo === doColo
+      const canHostDO = coloMatch // If requested == actual, this colo can host DOs
 
       // Calculate distances
       let visitorDistanceToWorker = 0
@@ -295,20 +300,31 @@ export default {
       const sanitizedDoColo = String(doColo || 'UNKNOWN').replace(/[\x00-\x1F\x7F]/g, '').trim()
 
       const responseData = {
+        // Colo discovery info
+        requestedColo: targetColo,
+        actualColo: doColo,
+        coloMatch,
+        canHostDO,
+        // Latency measurements
         visitorLatencyToWorker,
         workerLatencyToDurable,
+        // Distance measurements (km)
         visitorDistanceToWorker,
         workerDistanceToDurable,
         visitorDistanceToDurable,
+        // Location details
         visitor,
         workerLocation,
+        requestedLocation,
         durableLocation,
       }
 
       return new Response(JSON.stringify(responseData, null, 2), {
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'x-do-colo': sanitizedDoColo,
+          'x-requested-colo': targetColo,
+          'x-actual-colo': sanitizedDoColo,
+          'x-colo-match': String(coloMatch),
           'x-do-latency': String(workerLatencyToDurable || 0),
           'x-visitor-latency': String(visitorLatencyToWorker ?? 0),
         },
@@ -362,26 +378,35 @@ export default {
     }
 
     // Proxy all other requests through the colo DO
+    // Pass the requested colo via header for auto-discovery
     const targetColo = colo?.toUpperCase()
     if (targetColo) {
-      return COLO.get(COLO.idFromName(targetColo)).fetch(req)
+      const doReq = new Request(req.url, req)
+      doReq.headers.set('X-Requested-Colo', targetColo)
+      return COLO.get(COLO.idFromName(targetColo)).fetch(doReq)
     }
 
     // No colo specified - use worker's colo
     const workerColo = cf?.colo || 'ORD'
-    return COLO.get(COLO.idFromName(workerColo)).fetch(req)
+    const doReq = new Request(req.url, req)
+    doReq.headers.set('X-Requested-Colo', workerColo)
+    return COLO.get(COLO.idFromName(workerColo)).fetch(doReq)
   },
 }
 
 /**
  * Colo Durable Object - proxies requests from specific colos
  *
- * The DO discovers its own colo by fetching workers.cloudflare.com/cf.json
- * during initialization, then proxies requests through that colo.
+ * Auto-discovery pattern (like WDOL):
+ * - DO discovers its actual colo via workers.cloudflare.com/cf.json
+ * - If requestedColo === actualColo, registers in DORegistry (this colo can host DOs)
+ * - Always returns both requestedColo and actualColo for transparency
+ * - New DO-capable colos automatically appear when Cloudflare adds support
  */
 export class Colo {
   private colo: string = 'UNKNOWN'
   private env: Env
+  private registered: boolean = false
 
   constructor(private state: DurableObjectState, env: Env) {
     this.env = env
@@ -395,13 +420,104 @@ export class Colo {
     })
   }
 
+  /**
+   * Register this DO in the registry if it's running in the requested colo.
+   * This is how we auto-discover DO-capable colos.
+   *
+   * Also detects colo migrations (DO was in colo X, now in colo Y).
+   */
+  private async maybeRegister(requestedColo: string, ctx?: ExecutionContext): Promise<void> {
+    if (!this.env.DO_REGISTRY) return
+
+    const doRegister = async () => {
+      try {
+        const registryId = this.env.DO_REGISTRY!.idFromName('index')
+        const registry = this.env.DO_REGISTRY!.get(registryId)
+
+        // Check if this colo was previously registered as DO-capable
+        const lookupRes = await registry.fetch(`https://internal/lookup/COLO/${requestedColo}`)
+
+        if (lookupRes.ok) {
+          // Entry exists - check if the DO moved
+          const existingEntry = await lookupRes.json() as { colo: string; metadata?: { canHostDO?: boolean } }
+
+          if (existingEntry.metadata?.canHostDO && existingEntry.colo !== this.colo) {
+            // ALERT: DO was in this colo but has moved!
+            // This could be temporary (CF maintenance) or permanent (CF removed DO support)
+            console.warn(`[COLO MIGRATION ALERT] DO for ${requestedColo} moved from ${existingEntry.colo} to ${this.colo}`)
+
+            // Update the registry to mark this colo as no longer hosting
+            await registry.fetch('https://internal/register', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                namespace: 'COLO',
+                name: requestedColo,
+                id: this.state.id.toString(),
+                colo: this.colo, // Now routing to different colo
+                createdAt: Date.now(),
+                lastAccessedAt: Date.now(),
+                metadata: {
+                  city: colos[requestedColo.toLowerCase()] || requestedColo,
+                  canHostDO: false, // No longer can host
+                  routesTo: this.colo,
+                  previousColo: existingEntry.colo,
+                  migratedAt: new Date().toISOString(),
+                },
+              }),
+            })
+          }
+        }
+
+        // Only register as DO-capable if actual colo matches requested colo
+        if (this.colo === requestedColo && !this.registered) {
+          await registry.fetch('https://internal/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              namespace: 'COLO',
+              name: this.colo,
+              id: this.state.id.toString(),
+              colo: this.colo,
+              createdAt: Date.now(),
+              lastAccessedAt: Date.now(),
+              metadata: {
+                city: colos[this.colo.toLowerCase()] || this.colo,
+                canHostDO: true,
+                discoveredAt: new Date().toISOString(),
+              },
+            }),
+          })
+          this.registered = true
+          console.log(`[COLO DISCOVERED] ${this.colo} can host Durable Objects`)
+        }
+      } catch (e) {
+        // Registration failed - don't block main operation
+        console.error('[COLO REGISTRY ERROR]', e instanceof Error ? e.message : e)
+      }
+    }
+
+    // Run registration in background if we have execution context
+    if (ctx) {
+      ctx.waitUntil(doRegister())
+    } else {
+      await doRegister()
+    }
+  }
+
   async fetch(req: Request): Promise<Response> {
     const { pathname, search } = new URL(req.url)
+
+    // Extract the requested colo from the request header (set by worker)
+    const requestedColo = req.headers.get('X-Requested-Colo') || this.colo
 
     // Simple colo check - return just the colo name for root path
     if (pathname === '/' && !search) {
       return new Response(this.colo)
     }
+
+    // Try to register if this colo can host DOs (runs in background)
+    await this.maybeRegister(requestedColo)
 
     // Get user context if CTX binding is available
     let user: unknown = undefined
@@ -427,7 +543,14 @@ export class Colo {
     } catch (e) {
       error = e instanceof Error ? e.message : 'Fetch failed'
       return new Response(
-        JSON.stringify({ api, error, colo: { iata: this.colo, city: colos[this.colo.toLowerCase()] } }, null, 2),
+        JSON.stringify({
+          api,
+          error,
+          requestedColo,
+          actualColo: this.colo,
+          coloMatch: requestedColo === this.colo,
+          colo: { iata: this.colo, city: colos[this.colo.toLowerCase()] },
+        }, null, 2),
         { headers: { 'content-type': 'application/json; charset=utf-8' }, status: 502 }
       )
     }
@@ -447,6 +570,9 @@ export class Colo {
     const coloInfo = {
       iata: this.colo,
       city: colos[this.colo.toLowerCase()] || this.colo,
+      requested: requestedColo,
+      actual: this.colo,
+      match: requestedColo === this.colo,
     }
 
     // Build locations map organized by region
