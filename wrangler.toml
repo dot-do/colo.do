@@ -13,7 +13,8 @@ account_id = "b6641681fe423910342b9ffa1364c76d"
 [durable_objects]
 bindings = [
   { name = "COLO_DO", class_name = "ColoDO" },
-  { name = "DO_REGISTRY", class_name = "DORegistryDO" }
+  { name = "DO_REGISTRY", class_name = "DORegistryDO" },
+  { name = "COLO_SERVICE", class_name = "ColoServiceDO" }
 ]
 
 [[migrations]]
@@ -27,3 +28,7 @@ new_sqlite_classes = ["DORegistryDO"]
 [[migrations]]
 tag = "v3"
 renamed_classes = [{ from = "Colo", to = "ColoDO" }]
+
+[[migrations]]
+tag = "v4"
+new_classes = ["ColoServiceDO"]

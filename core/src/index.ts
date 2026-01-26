@@ -177,3 +177,22 @@ export {
   type ColoCluster,
   type ClusterStatus,
 } from './colo-cluster.js'
+
+// Colo Service - RPC/service binding for programmatic DO management
+export {
+  // Service DO
+  ColoServiceDO,
+  // Client for service binding
+  createColoClient,
+  // Migration helper
+  migrateDO,
+  // Types
+  type ColoClient,
+  type CreateInColoOptions,
+  type CreateInColoResult,
+  type MoveDOOptions,
+  type MoveDOResult,
+  type DOLocationResult,
+  type MigrateOptions,
+  type MigrateResult,
+} from './colo-service.js'

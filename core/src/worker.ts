@@ -4,13 +4,17 @@
  * Proxy worker for routing requests to DOs in specific colos.
  * Deploy this to get the colo.do API at your domain.
  *
- * Routes:
+ * Routes (subdomain-based - primary API):
+ * - GET {colo}.colo.do/* - Proxy to DO in specific colo
+ * - Example: lax.colo.do/query → routes to LAX colo
+ *
+ * Routes (path-based - alternative):
  * - GET /api - Get colo information and latencies
  * - GET /api/colos - List all colos
  * - GET /api/colos/:colo - Get info for a specific colo
  * - GET /api/nearest?colos=IAD,ORD,SFO - Find nearest from list
  * - GET /api/distance?from=IAD&to=LAX - Calculate distance
- * - GET /:colo/* - Proxy to DO in specific colo
+ * - GET /:colo/* - Proxy to DO in specific colo (fallback)
  */
 
 import {
@@ -29,12 +33,15 @@ import {
   estimateLatency,
 } from './location.js'
 
-// Re-export DORegistryDO for wrangler DO binding
+// Re-export DOs for wrangler bindings
 export { DORegistryDO } from './do-registry.js'
+export { ColoServiceDO } from './colo-service.js'
 
 export interface Env {
   // Optional: A DO namespace for testing colo placement
   COLO_DO?: DurableObjectNamespace
+  // Optional: Colo Service DO for programmatic DO management
+  COLO_SERVICE?: DurableObjectNamespace
 }
 
 /**
@@ -44,6 +51,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
+    const hostname = url.hostname
 
     // CORS headers
     const corsHeaders = {
@@ -61,6 +69,24 @@ export default {
     const location = getLocation(request)
 
     try {
+      // ================================================================
+      // Subdomain-based routing: {colo}.colo.do/*
+      // Examples:
+      //   lax.colo.do/query → LAX
+      //   iad.colo.do/api → IAD
+      //   london.colo.do/data → LHR (city alias)
+      // ================================================================
+      const subdomainColo = parseSubdomainColo(hostname)
+      if (subdomainColo && env.COLO_DO) {
+        return handleColoDORequest(
+          request,
+          env.COLO_DO,
+          subdomainColo,
+          location.colo,
+          path,
+          corsHeaders
+        )
+      }
       // API routes
       if (path === '/api' || path === '/api/') {
         return json({
@@ -184,6 +210,37 @@ export default {
           distance,
           latency,
         }, corsHeaders)
+      }
+
+      // Colo Service API - programmatic DO management
+      // Format: /service/*
+      if (path.startsWith('/service') && env.COLO_SERVICE) {
+        const serviceId = env.COLO_SERVICE.idFromName('global')
+        const stub = env.COLO_SERVICE.get(serviceId)
+
+        const servicePath = path.replace('/service', '') || '/'
+        const forwardUrl = new URL(request.url)
+        forwardUrl.pathname = servicePath
+
+        const forwardRequest = new Request(forwardUrl.toString(), {
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+        })
+
+        const response = await stub.fetch(forwardRequest)
+
+        // Add CORS headers
+        const newHeaders = new Headers(response.headers)
+        for (const [key, value] of Object.entries(corsHeaders)) {
+          newHeaders.set(key, value)
+        }
+
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders,
+        })
       }
 
       // Proxy to DO in specific colo
@@ -379,3 +436,203 @@ export class ColoDO implements DurableObject {
 
 // Backwards compatibility alias for migration from 'Colo' to 'ColoDO'
 export { ColoDO as Colo }
+
+// ============================================================================
+// Subdomain Routing Helpers
+// ============================================================================
+
+/**
+ * City name to IATA code mapping for subdomain aliases
+ */
+const CITY_ALIASES: Record<string, string> = {
+  // US Cities
+  'losangeles': 'LAX',
+  'la': 'LAX',
+  'sanfrancisco': 'SFO',
+  'sf': 'SFO',
+  'seattle': 'SEA',
+  'portland': 'PDX',
+  'phoenix': 'PHX',
+  'denver': 'DEN',
+  'saltlakecity': 'SLC',
+  'lasvegas': 'LAS',
+  'vegas': 'LAS',
+  'ashburn': 'IAD',
+  'dc': 'IAD',
+  'washington': 'IAD',
+  'newark': 'EWR',
+  'newyork': 'EWR',
+  'ny': 'EWR',
+  'nyc': 'EWR',
+  'chicago': 'ORD',
+  'atlanta': 'ATL',
+  'dallas': 'DFW',
+  'miami': 'MIA',
+  'boston': 'BOS',
+  'sanjose': 'SJC',
+
+  // Canada
+  'toronto': 'YYZ',
+  'montreal': 'YUL',
+
+  // Europe
+  'london': 'LHR',
+  'amsterdam': 'AMS',
+  'frankfurt': 'FRA',
+  'paris': 'CDG',
+  'madrid': 'MAD',
+  'milan': 'MXP',
+  'dublin': 'DUB',
+  'zurich': 'ZRH',
+  'brussels': 'BRU',
+  'copenhagen': 'CPH',
+  'stockholm': 'ARN',
+  'oslo': 'OSL',
+  'helsinki': 'HEL',
+  'warsaw': 'WAW',
+  'prague': 'PRG',
+  'vienna': 'VIE',
+  'budapest': 'BUD',
+
+  // Asia Pacific
+  'tokyo': 'NRT',
+  'hongkong': 'HKG',
+  'hk': 'HKG',
+  'singapore': 'SIN',
+  'seoul': 'ICN',
+  'mumbai': 'BOM',
+  'delhi': 'DEL',
+  'bangkok': 'BKK',
+  'taipei': 'TPE',
+  'kualalumpur': 'KUL',
+  'kl': 'KUL',
+
+  // Oceania
+  'sydney': 'SYD',
+  'melbourne': 'MEL',
+  'auckland': 'AKL',
+
+  // South America
+  'saopaulo': 'GRU',
+  'rio': 'GIG',
+  'riodejaneiro': 'GIG',
+  'buenosaires': 'EZE',
+  'santiago': 'SCL',
+
+  // Africa
+  'johannesburg': 'JNB',
+  'joburg': 'JNB',
+  'capetown': 'CPT',
+
+  // Middle East
+  'dubai': 'DXB',
+  'telaviv': 'TLV',
+}
+
+/**
+ * Parse subdomain to extract colo IATA code
+ *
+ * Supports:
+ * - Direct IATA: lax.colo.do → LAX
+ * - City names: london.colo.do → LHR
+ * - Case insensitive: LAX.colo.do → LAX
+ *
+ * @returns IATA code or undefined if not a colo subdomain
+ */
+function parseSubdomainColo(hostname: string): string | undefined {
+  // Match patterns:
+  // - {colo}.colo.do
+  // - {colo}.colo-do.dotdo.workers.dev
+  // - {colo}.localhost (for local dev)
+
+  const patterns = [
+    /^([a-z0-9-]+)\.colo\.do$/i,
+    /^([a-z0-9-]+)\.colo-do\.dotdo\.workers\.dev$/i,
+    /^([a-z0-9-]+)\.localhost$/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = hostname.match(pattern)
+    if (match) {
+      const subdomain = match[1].toLowerCase()
+
+      // Skip 'www' and 'api' subdomains
+      if (subdomain === 'www' || subdomain === 'api') {
+        return undefined
+      }
+
+      // Check if it's a direct IATA code (3 letters)
+      if (/^[a-z]{3}$/i.test(subdomain)) {
+        const iata = subdomain.toUpperCase()
+        if (getColo(iata)) {
+          return iata
+        }
+      }
+
+      // Check city aliases
+      const aliasIata = CITY_ALIASES[subdomain.replace(/-/g, '')]
+      if (aliasIata) {
+        return aliasIata
+      }
+
+      // Not a valid colo subdomain
+      return undefined
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Handle a request routed to a specific colo via subdomain or path
+ */
+async function handleColoDORequest(
+  request: Request,
+  namespace: DurableObjectNamespace,
+  targetColo: string,
+  workerColo: string,
+  path: string,
+  corsHeaders: Record<string, string>
+): Promise<Response> {
+  const coloInfo = getColo(targetColo)
+  if (!coloInfo) {
+    return new Response(JSON.stringify({ error: `Unknown colo: ${targetColo}` }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    })
+  }
+
+  // Create DO ID targeting the specific colo
+  const doName = `colo:${targetColo}`
+  const doId = namespace.idFromName(doName)
+  const stub = namespace.get(doId, { locationHint: coloInfo.region })
+
+  // Forward request with colo info headers + timestamp for RTT measurement
+  const headers = new Headers(request.headers)
+  headers.set('X-Worker-Colo', workerColo)
+  headers.set('X-Target-Colo', targetColo)
+  headers.set('X-Request-Timestamp', Date.now().toString())
+
+  const forwardUrl = new URL(request.url)
+  forwardUrl.pathname = path
+
+  const forwardRequest = new Request(forwardUrl.toString(), {
+    method: request.method,
+    headers,
+    body: request.body,
+  })
+
+  const response = await stub.fetch(forwardRequest)
+
+  // Add CORS headers to response
+  const newHeaders = new Headers(response.headers)
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    newHeaders.set(key, value)
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders,
+  })
+}
