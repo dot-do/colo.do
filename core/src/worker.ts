@@ -424,85 +424,50 @@ export class Colo {
    * Register this DO in the registry if it's running in the requested colo.
    * This is how we auto-discover DO-capable colos.
    *
-   * Also detects colo migrations (DO was in colo X, now in colo Y).
+   * IMPORTANT: This is fire-and-forget, never blocks the main request.
+   * Uses state.waitUntil() to run in background.
    */
-  private async maybeRegister(requestedColo: string, ctx?: ExecutionContext): Promise<void> {
-    if (!this.env.DO_REGISTRY) return
+  private maybeRegister(requestedColo: string): void {
+    // Skip if already registered or no registry binding
+    if (this.registered || !this.env.DO_REGISTRY) return
 
-    const doRegister = async () => {
+    // Only register if this DO is running in the requested colo
+    // (This proves this colo can host DOs)
+    if (this.colo !== requestedColo) return
+
+    // Mark as registered immediately to prevent duplicate registrations
+    this.registered = true
+
+    // Fire and forget - use DO's waitUntil to run in background
+    this.state.waitUntil((async () => {
       try {
         const registryId = this.env.DO_REGISTRY!.idFromName('index')
         const registry = this.env.DO_REGISTRY!.get(registryId)
 
-        // Check if this colo was previously registered as DO-capable
-        const lookupRes = await registry.fetch(`https://internal/lookup/COLO/${requestedColo}`)
-
-        if (lookupRes.ok) {
-          // Entry exists - check if the DO moved
-          const existingEntry = await lookupRes.json() as { colo: string; metadata?: { canHostDO?: boolean } }
-
-          if (existingEntry.metadata?.canHostDO && existingEntry.colo !== this.colo) {
-            // ALERT: DO was in this colo but has moved!
-            // This could be temporary (CF maintenance) or permanent (CF removed DO support)
-            console.warn(`[COLO MIGRATION ALERT] DO for ${requestedColo} moved from ${existingEntry.colo} to ${this.colo}`)
-
-            // Update the registry to mark this colo as no longer hosting
-            await registry.fetch('https://internal/register', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                namespace: 'COLO',
-                name: requestedColo,
-                id: this.state.id.toString(),
-                colo: this.colo, // Now routing to different colo
-                createdAt: Date.now(),
-                lastAccessedAt: Date.now(),
-                metadata: {
-                  city: colos[requestedColo.toLowerCase()] || requestedColo,
-                  canHostDO: false, // No longer can host
-                  routesTo: this.colo,
-                  previousColo: existingEntry.colo,
-                  migratedAt: new Date().toISOString(),
-                },
-              }),
-            })
-          }
-        }
-
-        // Only register as DO-capable if actual colo matches requested colo
-        if (this.colo === requestedColo && !this.registered) {
-          await registry.fetch('https://internal/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              namespace: 'COLO',
-              name: this.colo,
-              id: this.state.id.toString(),
-              colo: this.colo,
-              createdAt: Date.now(),
-              lastAccessedAt: Date.now(),
-              metadata: {
-                city: colos[this.colo.toLowerCase()] || this.colo,
-                canHostDO: true,
-                discoveredAt: new Date().toISOString(),
-              },
-            }),
-          })
-          this.registered = true
-          console.log(`[COLO DISCOVERED] ${this.colo} can host Durable Objects`)
-        }
+        await registry.fetch('https://internal/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            namespace: 'COLO',
+            name: this.colo,
+            id: this.state.id.toString(),
+            colo: this.colo,
+            createdAt: Date.now(),
+            lastAccessedAt: Date.now(),
+            metadata: {
+              city: colos[this.colo.toLowerCase()] || this.colo,
+              canHostDO: true,
+              discoveredAt: new Date().toISOString(),
+            },
+          }),
+        })
+        console.log(`[COLO DISCOVERED] ${this.colo} can host Durable Objects`)
       } catch (e) {
-        // Registration failed - don't block main operation
+        // Registration failed - reset flag to retry later
+        this.registered = false
         console.error('[COLO REGISTRY ERROR]', e instanceof Error ? e.message : e)
       }
-    }
-
-    // Run registration in background if we have execution context
-    if (ctx) {
-      ctx.waitUntil(doRegister())
-    } else {
-      await doRegister()
-    }
+    })())
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -516,8 +481,8 @@ export class Colo {
       return new Response(this.colo)
     }
 
-    // Try to register if this colo can host DOs (runs in background)
-    await this.maybeRegister(requestedColo)
+    // Try to register if this colo can host DOs (fire-and-forget, never blocks)
+    this.maybeRegister(requestedColo)
 
     // Get user context if CTX binding is available
     let user: unknown = undefined
