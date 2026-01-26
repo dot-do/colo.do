@@ -5,10 +5,18 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "b6641681fe423910342b9ffa1364c76d"
 workers_dev = true
 
-# Routes for subdomain testing on workers.do
-# Pattern: *colo.workers.do matches colo.workers.do, iad-colo.workers.do, etc.
+# Routes
 routes = [
   { pattern = "*colo.workers.do/*", zone_name = "workers.do" }
+]
+
+# NOTE: colo.do route must be updated via dashboard
+# The */* route on colo.do zone is pointing to another worker
+# Change it to point to colo-do worker
+
+# Service bindings
+services = [
+  { binding = "CTX", service = "ctx-do", environment = "production" }
 ]
 
 # Custom domain (requires DNS to be managed in Cloudflare)
@@ -19,6 +27,7 @@ routes = [
 # Durable Objects
 [durable_objects]
 bindings = [
+  { name = "COLO", class_name = "ColoDO" },
   { name = "COLO_DO", class_name = "ColoDO" },
   { name = "DO_REGISTRY", class_name = "DORegistryDO" },
   { name = "COLO_SERVICE", class_name = "ColoServiceDO" }

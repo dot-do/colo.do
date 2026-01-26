@@ -1,20 +1,8 @@
 /**
- * colo.do Worker
+ * colo.do Worker - Durable Object Colos
  *
- * Proxy worker for routing requests to DOs in specific colos.
- * Deploy this to get the colo.do API at your domain.
- *
- * Routes (subdomain-based - primary API):
- * - GET {colo}.colo.do/* - Proxy to DO in specific colo
- * - Example: lax.colo.do/query → routes to LAX colo
- *
- * Routes (path-based - alternative):
- * - GET /api - Get colo information and latencies
- * - GET /api/colos - List all colos
- * - GET /api/colos/:colo - Get info for a specific colo
- * - GET /api/nearest?colos=IAD,ORD,SFO - Find nearest from list
- * - GET /api/distance?from=IAD&to=LAX - Calculate distance
- * - GET /:colo/* - Proxy to DO in specific colo (fallback)
+ * API-compatible with the original drivly/colo.do
+ * Plus new features: registry, service API, expanded colo database
  */
 
 import {
@@ -31,792 +19,446 @@ import {
   nearestColo,
   coloDistance,
   estimateLatency,
+  getDistance,
 } from './location.js'
 
 // Re-export DOs for wrangler bindings
 export { DORegistryDO } from './do-registry.js'
 export { ColoServiceDO } from './colo-service.js'
 
+// Original API structure
+export const api = {
+  icon: '⚡️',
+  name: 'colo.do',
+  description: 'Durable Object Colos',
+  url: 'https://colo.do/api',
+  type: 'https://apis.do/proxies',
+  endpoints: {
+    getCurrentColo: 'https://colo.do/api',
+    proxyFromColo: 'https://ord.colo.do/:url',
+  },
+  site: 'https://colo.do',
+  login: 'https://colo.do/login',
+  signup: 'https://colo.do/signup',
+  repo: 'https://github.com/drivly/colo.do',
+}
+
 export interface Env {
-  // Optional: A DO namespace for testing colo placement
+  // Main colo DO (original)
+  COLO: DurableObjectNamespace
+  // Alias for backwards compat
   COLO_DO?: DurableObjectNamespace
-  // Optional: Colo Service DO for programmatic DO management
+  // CTX service for user info
+  CTX?: Fetcher
+  // Colo Service DO for programmatic DO management
   COLO_SERVICE?: DurableObjectNamespace
-  // Optional: DO Registry for fast ID lookups
+  // DO Registry for fast ID lookups
   DO_REGISTRY?: DurableObjectNamespace
+}
+
+// City name mapping for locations object - all DO-capable colos (PascalCase)
+const colos: Record<string, string> = {
+  // North America - West
+  sjc: 'SanJose',
+  lax: 'LosAngeles',
+  sea: 'Seattle',
+  sfo: 'SanFrancisco',
+  pdx: 'Portland',
+  phx: 'Phoenix',
+  den: 'Denver',
+  slc: 'SaltLakeCity',
+  las: 'LasVegas',
+  san: 'SanDiego',
+  smf: 'Sacramento',
+  // North America - Central
+  ord: 'Chicago',
+  dfw: 'Dallas',
+  iah: 'Houston',
+  msp: 'Minneapolis',
+  mci: 'KansasCity',
+  stl: 'StLouis',
+  aus: 'Austin',
+  sat: 'SanAntonio',
+  oma: 'Omaha',
+  okc: 'OklahomaCity',
+  // North America - East
+  iad: 'Ashburn',
+  ewr: 'Newark',
+  atl: 'Atlanta',
+  mia: 'Miami',
+  bos: 'Boston',
+  clt: 'Charlotte',
+  dtw: 'Detroit',
+  phl: 'Philadelphia',
+  rdu: 'Raleigh',
+  tpa: 'Tampa',
+  mco: 'Orlando',
+  bna: 'Nashville',
+  ind: 'Indianapolis',
+  cmh: 'Columbus',
+  cle: 'Cleveland',
+  pit: 'Pittsburgh',
+  buf: 'Buffalo',
+  cvg: 'Cincinnati',
+  jax: 'Jacksonville',
+  // Canada
+  yyz: 'Toronto',
+  yul: 'Montreal',
+  yvr: 'Vancouver',
+  yyc: 'Calgary',
+  yow: 'Ottawa',
+  // Europe - West
+  lhr: 'London',
+  ams: 'Amsterdam',
+  fra: 'Frankfurt',
+  cdg: 'Paris',
+  mad: 'Madrid',
+  mxp: 'Milan',
+  dub: 'Dublin',
+  zrh: 'Zurich',
+  bru: 'Brussels',
+  mrs: 'Marseille',
+  lis: 'Lisbon',
+  bcn: 'Barcelona',
+  man: 'Manchester',
+  fco: 'Rome',
+  muc: 'Munich',
+  dus: 'Dusseldorf',
+  ham: 'Hamburg',
+  txl: 'Berlin',
+  vie: 'Vienna',
+  // Europe - North
+  cph: 'Copenhagen',
+  arn: 'Stockholm',
+  osl: 'Oslo',
+  hel: 'Helsinki',
+  // Europe - East
+  waw: 'Warsaw',
+  prg: 'Prague',
+  bud: 'Budapest',
+  // Asia - East
+  nrt: 'Tokyo',
+  hkg: 'HongKong',
+  icn: 'Seoul',
+  tpe: 'Taipei',
+  kix: 'Osaka',
+  fuk: 'Fukuoka',
+  oka: 'Okinawa',
+  // Asia - Southeast
+  sin: 'Singapore',
+  bkk: 'Bangkok',
+  kul: 'KualaLumpur',
+  cgk: 'Jakarta',
+  mnl: 'Manila',
+  sgn: 'HoChiMinhCity',
+  han: 'Hanoi',
+  // Asia - South
+  bom: 'Mumbai',
+  del: 'Delhi',
+  blr: 'Bangalore',
+  maa: 'Chennai',
+  hyd: 'Hyderabad',
+  ccu: 'Kolkata',
+  // Middle East
+  dxb: 'Dubai',
+  tlv: 'TelAviv',
+  doh: 'Doha',
+  auh: 'AbuDhabi',
+  bah: 'Bahrain',
+  kwi: 'Kuwait',
+  mct: 'Muscat',
+  ruh: 'Riyadh',
+  jed: 'Jeddah',
+  // Oceania
+  syd: 'Sydney',
+  mel: 'Melbourne',
+  akl: 'Auckland',
+  bne: 'Brisbane',
+  per: 'Perth',
+  adl: 'Adelaide',
+  chc: 'Christchurch',
+  wlg: 'Wellington',
+  // South America
+  gru: 'SaoPaulo',
+  gig: 'RioDeJaneiro',
+  eze: 'BuenosAires',
+  scl: 'Santiago',
+  bog: 'Bogota',
+  lim: 'Lima',
+  // Africa
+  jnb: 'Johannesburg',
+  cpt: 'CapeTown',
+  cai: 'Cairo',
+  los: 'Lagos',
+  nbo: 'Nairobi',
 }
 
 /**
  * Main worker fetch handler
  */
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url)
-    const path = url.pathname
-    const hostname = url.hostname
+  fetch: async (req: Request, env: Env): Promise<Response> => {
+    const { hostname, pathname, search } = new URL(req.url)
+    const cf = (req as unknown as { cf?: IncomingRequestCfProperties }).cf
 
-    // CORS headers
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+    // Extract colo from hostname
+    // Pattern 1: iad.colo.do → 'iad'
+    // Pattern 2: iad-colo.workers.do → 'iad'
+    // Pattern 3: colo.workers.do → null (use worker colo)
+    let colo: string | undefined
+    if (hostname.endsWith('.colo.do')) {
+      // iad.colo.do → 'iad'
+      colo = hostname.split('.')[0]
+      if (colo === 'colo' || colo === 'www' || colo === 'api') colo = undefined
+    } else if (hostname.match(/^([a-z]{3})-colo\.workers\.do$/i)) {
+      // iad-colo.workers.do → 'iad'
+      colo = hostname.split('-')[0]
     }
 
-    // Handle CORS preflight
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders })
+    // Use COLO binding (or fall back to COLO_DO for our new naming)
+    const COLO = env.COLO || env.COLO_DO
+
+    if (!COLO) {
+      return new Response(JSON.stringify({ error: 'COLO binding not configured' }, null, 2), {
+        status: 500,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
     }
 
-    // Get location info
-    const location = getLocation(request)
+    // /api endpoint - return latency and distance info
+    if (pathname === '/api') {
+      try {
+        const workerColo = cf?.colo || 'UNKNOWN'
+        const latitude = cf?.latitude ? parseFloat(cf.latitude) : 0
+        const longitude = cf?.longitude ? parseFloat(cf.longitude) : 0
+        const { country, region, city, asn, asOrganization: isp, metroCode, postalCode } = cf || {}
+        const visitorLatencyToWorker = cf?.clientTcpRtt
 
-    try {
-      // ================================================================
-      // Subdomain-based routing: {colo}.colo.do/*
-      // Examples:
-      //   lax.colo.do/ → API info for LAX colo
-      //   lax.colo.do/query → route to LAX DO
-      //   iad.colo.do/api → IAD API info
-      //   london.colo.do/data → route to LHR DO
-      // ================================================================
-      const subdomainColo = parseSubdomainColo(hostname)
-      if (subdomainColo) {
-        const coloInfo = getColo(subdomainColo)
+        const visitor = { latitude, longitude, country, region, city, asn, isp, metroCode, postalCode }
 
-        // For root path or /api, show API response for this colo
-        if (path === '/' || path === '' || path === '/api' || path === '/api/') {
-          const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
-          const baseUrl = getBaseUrl(hostname)
+        // Use local data for locations
+        const locations = Object.values(COLOS).map(c => ({
+          iata: c.iata,
+          lat: c.lat,
+          lon: c.lon,
+          cca2: c.country,
+          region: c.region,
+          city: c.city,
+        }))
 
-          // Build colo switching links for all DO-capable colos
-          const coloLinks: Record<string, string> = {}
-          const doColos = getDOColos()
-          for (const coloInfo of doColos) {
-            coloLinks[coloInfo.iata.toLowerCase()] = buildColoUrl(baseUrl, coloInfo.iata, hostname)
-          }
-
-          return json({
-            api: {
-              name: 'colo.do',
-              description: 'Location-aware Durable Objects',
-              version: '1.0',
-              docs: 'https://github.com/dot-do/colo.do',
-              npm: 'https://npmjs.com/package/colo.do',
-            },
-            colos: {
-              current: subdomainColo,
-              info: coloInfo,
-              switch: coloLinks,
-              all: `${baseUrl}/api/colos`,
-              nearest: `${baseUrl}/api/nearest`,
-            },
-            service: {
-              create: `${baseUrl}/service/create`,
-              parse: `${baseUrl}/service/parse`,
-              location: `${baseUrl}/service/location`,
-            },
-            meta: {
-              requestId: crypto.randomUUID(),
-              timestamp: new Date().toISOString(),
-              method: request.method,
-              url: request.url,
-              userAgent: request.headers.get('User-Agent') || 'Unknown',
-              edgeLocation: location.city || 'Unknown',
-              edgeColo: location.colo,
-              targetColo: subdomainColo,
-              httpProtocol: cf?.httpProtocol || 'Unknown',
-              tlsVersion: cf?.tlsVersion || 'Unknown',
-            },
-            user: {
-              ip: cf?.clientTcpRtt ? 'hidden' : request.headers.get('CF-Connecting-IP') || 'Unknown',
-              city: location.city || 'Unknown',
-              region: location.region || 'Unknown',
-              country: location.country || 'Unknown',
-              timezone: location.timezone || 'Unknown',
-              latitude: location.latitude?.toString() || 'Unknown',
-              longitude: location.longitude?.toString() || 'Unknown',
-              colo: location.colo,
-              coloInfo: location.coloInfo,
-              nearestColos: sortByDistance(location.colo).slice(0, 5),
-            },
-          }, corsHeaders)
+        // Get DO stub and measure latency
+        const targetColo = colo?.toUpperCase() || workerColo
+        const stub = COLO.get(COLO.idFromName(targetColo))
+        const start = Date.now()
+        let doColo = targetColo
+        let workerLatencyToDurable = 0
+        try {
+          doColo = await stub.fetch('https://colo.do').then(res => res.text())
+          workerLatencyToDurable = Date.now() - start
+        } catch {
+          // DO fetch failed - use target colo as fallback
+          workerLatencyToDurable = Date.now() - start
         }
 
-        // For other paths, route to the DO in that colo
-        if (env.COLO_DO) {
-          return handleColoDORequest(
-            request,
-            env.COLO_DO,
-            subdomainColo,
-            location.colo,
-            path,
-            corsHeaders
-          )
-        }
+      // Find location info
+      const workerLocation = locations.find(loc => loc.iata === workerColo) || null
+      const durableLocation = locations.find(loc => loc.iata === (colo?.toUpperCase() || doColo)) || null
+
+      // Calculate distances
+      let visitorDistanceToWorker = 0
+      let workerDistanceToDurable = 0
+      let visitorDistanceToDurable = 0
+
+      if (workerLocation) {
+        visitorDistanceToWorker = Math.round(
+          getDistance(latitude, longitude, workerLocation.lat, workerLocation.lon) / 1000
+        )
       }
-      // API routes - match colo.do JSON structure
-      if (path === '/api' || path === '/api/' || path === '/' || path === '') {
-        const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
-
-        // Build colo switching links
-        const baseUrl = getBaseUrl(hostname)
-        const coloLinks: Record<string, string> = {}
-        const doColos = getDOColos()
-        for (const coloInfo of doColos) {
-          coloLinks[coloInfo.iata.toLowerCase()] = buildColoUrl(baseUrl, coloInfo.iata, hostname)
-        }
-
-        return json({
-          api: {
-            name: 'colo.do',
-            description: 'Location-aware Durable Objects',
-            version: '1.0',
-            docs: 'https://github.com/dot-do/colo.do',
-            npm: 'https://npmjs.com/package/colo.do',
-          },
-          colos: {
-            current: location.colo,
-            info: location.coloInfo,
-            switch: coloLinks,
-            all: `${baseUrl}/api/colos`,
-            nearest: `${baseUrl}/api/nearest`,
-          },
-          service: {
-            create: `${baseUrl}/service/create`,
-            parse: `${baseUrl}/service/parse`,
-            location: `${baseUrl}/service/location`,
-          },
-          meta: {
-            requestId: crypto.randomUUID(),
-            timestamp: new Date().toISOString(),
-            method: request.method,
-            url: request.url,
-            userAgent: request.headers.get('User-Agent') || 'Unknown',
-            edgeLocation: location.city || 'Unknown',
-            edgeColo: location.colo,
-            httpProtocol: cf?.httpProtocol || 'Unknown',
-            tlsVersion: cf?.tlsVersion || 'Unknown',
-          },
-          user: {
-            ip: cf?.clientTcpRtt ? 'hidden' : request.headers.get('CF-Connecting-IP') || 'Unknown',
-            city: location.city || 'Unknown',
-            region: location.region || 'Unknown',
-            country: location.country || 'Unknown',
-            timezone: location.timezone || 'Unknown',
-            latitude: location.latitude?.toString() || 'Unknown',
-            longitude: location.longitude?.toString() || 'Unknown',
-            colo: location.colo,
-            coloInfo: location.coloInfo,
-            nearestColos: sortByDistance(location.colo).slice(0, 5),
-          },
-        }, corsHeaders)
+      if (workerLocation && durableLocation) {
+        workerDistanceToDurable = Math.round(
+          getDistance(workerLocation.lat, workerLocation.lon, durableLocation.lat, durableLocation.lon) / 1000
+        )
+      }
+      if (durableLocation) {
+        visitorDistanceToDurable = Math.round(
+          getDistance(latitude, longitude, durableLocation.lat, durableLocation.lon) / 1000
+        )
       }
 
-      // Seed endpoint - warm up cluster DO in this colo
-      // Use with https://tools.bunny.net/http-test?query=https://colo.do/api/seed
-      if (path === '/api/seed') {
-        const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
-        const currentColo = cf?.colo
+      // Sanitize header values - strip any control characters
+      const sanitizedDoColo = String(doColo || 'UNKNOWN').replace(/[\x00-\x1F\x7F]/g, '').trim()
 
-        return json({
-          seeded: true,
-          colo: currentColo,
-          timestamp: Date.now(),
-          message: currentColo
-            ? `Cluster DO seeded in ${currentColo}`
-            : 'Request from unknown colo',
-        }, corsHeaders)
+      const responseData = {
+        visitorLatencyToWorker,
+        workerLatencyToDurable,
+        visitorDistanceToWorker,
+        workerDistanceToDurable,
+        visitorDistanceToDurable,
+        visitor,
+        workerLocation,
+        durableLocation,
       }
 
-      if (path === '/api/colos' || path === '/api/colos/') {
-        const region = url.searchParams.get('region')
-        const doOnly = url.searchParams.get('do') === 'true'
-
-        let colos = Object.values(COLOS)
-
-        if (region) {
-          if (!isValidRegion(region)) {
-            return json(
-              {
-                error: `Invalid region: ${region}. Valid regions are: wnam, enam, weur, eeur, apac, oc, sam, afr, me`,
-              },
-              corsHeaders,
-              400
-            )
-          }
-          colos = getColosByRegion(region)
-        }
-        if (doOnly) {
-          colos = colos.filter(c => c.hasDO)
-        }
-
-        return json({ colos }, corsHeaders)
-      }
-
-      // Get specific colo info
-      const coloMatch = path.match(/^\/api\/colos\/([A-Z]{3})$/i)
-      if (coloMatch) {
-        const colo = getColo(coloMatch[1])
-        if (!colo) {
-          return json({ error: 'Colo not found' }, corsHeaders, 404)
-        }
-
-        const distance = coloDistance(location.colo, colo.iata)
-        const latency = estimateLatency(location.colo, colo.iata)
-
-        return json({
-          ...colo,
-          fromColo: location.colo,
-          distance,
-          latency,
-        }, corsHeaders)
-      }
-
-      // Find nearest colo
-      if (path === '/api/nearest') {
-        const colosParam = url.searchParams.get('colos')
-        if (!colosParam) {
-          return json({ error: 'colos parameter required' }, corsHeaders, 400)
-        }
-
-        const candidates = colosParam.split(',').map(c => c.trim().toUpperCase())
-        const nearest = nearestColo(location.colo, candidates)
-
-        if (!nearest) {
-          return json({ error: 'No valid colos found' }, corsHeaders, 404)
-        }
-
-        return json({
-          nearest,
-          nearestInfo: getColo(nearest),
-          fromColo: location.colo,
-          distance: coloDistance(location.colo, nearest),
-          latency: estimateLatency(location.colo, nearest),
-          candidates: sortByDistance(location.colo, candidates),
-        }, corsHeaders)
-      }
-
-      // Calculate distance
-      if (path === '/api/distance') {
-        const from = url.searchParams.get('from')
-        const to = url.searchParams.get('to')
-
-        if (!from || !to) {
-          return json({ error: 'from and to parameters required' }, corsHeaders, 400)
-        }
-
-        const distance = coloDistance(from, to)
-        const latency = estimateLatency(from, to)
-
-        if (distance === undefined) {
-          return json({ error: 'Invalid colo codes' }, corsHeaders, 400)
-        }
-
-        return json({
-          from: getColo(from),
-          to: getColo(to),
-          distance,
-          latency,
-        }, corsHeaders)
-      }
-
-      // DO Registry API - view registered DOs and their IDs
-      // Format: /registry/*
-      // - GET /registry/list - List all entries
-      // - GET /registry/stats - Get registry statistics
-      // - GET /registry/lookup/{namespace}/{name} - Lookup specific entry
-      // - DELETE /registry/entry/{namespace}/{name} - Delete an entry
-      if (path.startsWith('/registry') && env.DO_REGISTRY) {
-        const registryId = env.DO_REGISTRY.idFromName('index')
-        const stub = env.DO_REGISTRY.get(registryId)
-
-        const registryPath = path.replace('/registry', '') || '/'
-        const forwardUrl = new URL(request.url)
-        forwardUrl.pathname = registryPath
-
-        const forwardRequest = new Request(forwardUrl.toString(), {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        })
-
-        const response = await stub.fetch(forwardRequest)
-
-        // Add CORS headers
-        const newHeaders = new Headers(response.headers)
-        for (const [key, value] of Object.entries(corsHeaders)) {
-          newHeaders.set(key, value)
-        }
-
-        return new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: newHeaders,
-        })
-      }
-
-      // Colo Service API - programmatic DO management
-      // Format: /service/*
-      if (path.startsWith('/service') && env.COLO_SERVICE) {
-        const serviceId = env.COLO_SERVICE.idFromName('global')
-        const stub = env.COLO_SERVICE.get(serviceId)
-
-        const servicePath = path.replace('/service', '') || '/'
-        const forwardUrl = new URL(request.url)
-        forwardUrl.pathname = servicePath
-
-        const forwardRequest = new Request(forwardUrl.toString(), {
-          method: request.method,
-          headers: request.headers,
-          body: request.body,
-        })
-
-        const response = await stub.fetch(forwardRequest)
-
-        // Add CORS headers
-        const newHeaders = new Headers(response.headers)
-        for (const [key, value] of Object.entries(corsHeaders)) {
-          newHeaders.set(key, value)
-        }
-
-        return new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: newHeaders,
-        })
-      }
-
-      // Proxy to DO in specific colo
-      // Format: /:colo/:namespace/:id/*
-      const proxyMatch = path.match(/^\/([A-Z]{3})\/?(.*)$/i)
-      if (proxyMatch && env.COLO_DO) {
-        const targetColo = proxyMatch[1].toUpperCase()
-        const remainder = proxyMatch[2] || ''
-
-        const coloInfo = getColo(targetColo)
-        if (!coloInfo) {
-          return json({ error: `Unknown colo: ${targetColo}` }, corsHeaders, 404)
-        }
-
-        // Create DO ID targeting the specific colo
-        const doName = `colo:${targetColo}`
-        const doId = env.COLO_DO.idFromName(doName)
-        const stub = env.COLO_DO.get(doId)
-
-        // Forward request with colo info headers + timestamp for RTT measurement
-        const headers = new Headers(request.headers)
-        headers.set('X-Worker-Colo', location.colo)
-        headers.set('X-Target-Colo', targetColo)
-        headers.set('X-Request-Timestamp', Date.now().toString())
-
-        const forwardUrl = new URL(request.url)
-        forwardUrl.pathname = '/' + remainder
-
-        const forwardRequest = new Request(forwardUrl.toString(), {
-          method: request.method,
-          headers,
-          body: request.body,
-        })
-
-        return stub.fetch(forwardRequest)
-      }
-
-      // Homepage / documentation
-      if (path === '/' || path === '') {
-        return new Response(getHomepage(location), {
-          headers: {
-            'Content-Type': 'text/html',
-            ...corsHeaders,
-          },
-        })
-      }
-
-      return json({ error: 'Not found' }, corsHeaders, 404)
-
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      return json({ error: message }, corsHeaders, 500)
+      return new Response(JSON.stringify(responseData, null, 2), {
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'x-do-colo': sanitizedDoColo,
+          'x-do-latency': String(workerLatencyToDurable || 0),
+          'x-visitor-latency': String(visitorLatencyToWorker ?? 0),
+        },
+      })
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : 'Unknown error'
+      return new Response(
+        JSON.stringify({ error: errorMessage, stack: e instanceof Error ? e.stack : undefined }, null, 2),
+        { status: 500, headers: { 'content-type': 'application/json; charset=utf-8' } }
+      )
     }
+  }
+
+    // New API endpoints (extensions to original)
+    if (pathname === '/api/colos' || pathname === '/api/colos/') {
+      const url = new URL(req.url)
+      const regionFilter = url.searchParams.get('region')
+      const doOnly = url.searchParams.get('do') === 'true'
+
+      let colosList = Object.values(COLOS)
+      if (regionFilter && isValidRegion(regionFilter)) {
+        colosList = getColosByRegion(regionFilter)
+      }
+      if (doOnly) {
+        colosList = colosList.filter(c => c.hasDO)
+      }
+
+      return new Response(JSON.stringify({ colos: colosList }, null, 2), {
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+
+    // Registry API
+    if (pathname.startsWith('/registry') && env.DO_REGISTRY) {
+      const registryId = env.DO_REGISTRY.idFromName('index')
+      const stub = env.DO_REGISTRY.get(registryId)
+      const registryPath = pathname.replace('/registry', '') || '/'
+      const forwardUrl = new URL(req.url)
+      forwardUrl.pathname = registryPath
+      return stub.fetch(new Request(forwardUrl.toString(), req))
+    }
+
+    // Service API
+    if (pathname.startsWith('/service') && env.COLO_SERVICE) {
+      const serviceId = env.COLO_SERVICE.idFromName('global')
+      const stub = env.COLO_SERVICE.get(serviceId)
+      const servicePath = pathname.replace('/service', '') || '/'
+      const forwardUrl = new URL(req.url)
+      forwardUrl.pathname = servicePath
+      return stub.fetch(new Request(forwardUrl.toString(), req))
+    }
+
+    // Proxy all other requests through the colo DO
+    const targetColo = colo?.toUpperCase()
+    if (targetColo) {
+      return COLO.get(COLO.idFromName(targetColo)).fetch(req)
+    }
+
+    // No colo specified - use worker's colo
+    const workerColo = cf?.colo || 'ORD'
+    return COLO.get(COLO.idFromName(workerColo)).fetch(req)
   },
 }
 
 /**
- * JSON response helper
- */
-function json(data: unknown, headers: Record<string, string>, status = 200): Response {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
-  })
-}
-
-/**
- * Simple homepage HTML
- */
-function getHomepage(location: ReturnType<typeof getLocation>): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <title>colo.do - Location-aware Durable Objects</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; }
-    h1 { color: #f38020; }
-    code { background: #f4f4f4; padding: 0.2rem 0.4rem; border-radius: 4px; }
-    pre { background: #f4f4f4; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    .colo { font-size: 2rem; color: #f38020; font-weight: bold; }
-    a { color: #f38020; }
-  </style>
-</head>
-<body>
-  <h1>colo.do</h1>
-  <p>Location-aware Durable Objects for Cloudflare Workers.</p>
-
-  <p>You are currently being served from: <span class="colo">${location.colo}</span></p>
-  ${location.coloInfo ? `<p>${location.coloInfo.city}, ${location.coloInfo.country}</p>` : ''}
-
-  <h2>API Endpoints</h2>
-  <ul>
-    <li><code>GET <a href="/api">/api</a></code> - Your location info and nearest colos</li>
-    <li><code>GET <a href="/api/colos">/api/colos</a></code> - List all colos</li>
-    <li><code>GET <a href="/api/colos/LAX">/api/colos/:colo</a></code> - Get specific colo info</li>
-    <li><code>GET <a href="/api/nearest?colos=IAD,ORD,SFO,LHR">/api/nearest?colos=IAD,ORD,SFO</a></code> - Find nearest from list</li>
-    <li><code>GET <a href="/api/distance?from=IAD&to=LAX">/api/distance?from=IAD&to=LAX</a></code> - Calculate distance</li>
-  </ul>
-
-  <h2>Installation</h2>
-  <pre>npm install colo.do</pre>
-
-  <h2>Usage</h2>
-  <pre>import { createInColo, findNearestColo } from 'colo.do'
-
-// Create a DO in LAX
-const stub = createInColo(env.MY_DO, {
-  colo: 'LAX',
-  id: 'my-instance'
-})
-
-// Find nearest colo from a request
-const nearest = findNearestColo(request, ['IAD', 'ORD', 'SFO'])</pre>
-
-  <h2>Links</h2>
-  <ul>
-    <li><a href="https://github.com/dot-do/colo.do">GitHub</a></li>
-    <li><a href="https://npmjs.com/package/colo.do">npm</a></li>
-    <li><a href="https://rpc.do">rpc.do</a> - Type-safe RPC for Durable Objects</li>
-  </ul>
-</body>
-</html>`
-}
-
-/**
- * Simple Colo DO for testing colo placement
+ * Colo Durable Object - proxies requests from specific colos
  *
- * Note: DOs don't have direct access to their own colo location.
- * The cf.colo on the request shows where the request originated,
- * not where the DO is running.
- *
- * To verify placement, measure round-trip latency - DOs closer
- * to the request origin will have lower latency.
+ * The DO discovers its own colo by fetching workers.cloudflare.com/cf.json
+ * during initialization, then proxies requests through that colo.
  */
-export class ColoDO implements DurableObject {
-  private state: DurableObjectState
-  private initTime: number
+export class Colo {
+  private colo: string = 'UNKNOWN'
+  private env: Env
 
-  constructor(state: DurableObjectState) {
-    this.state = state
-    this.initTime = Date.now()
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    const startTime = Date.now()
-    const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
-
-    // Read from storage to ensure DO is fully initialized
-    await this.state.storage.get('_ping')
-
-    const processingTime = Date.now() - startTime
-    const workerColo = request.headers.get('X-Worker-Colo')
-    const targetColo = request.headers.get('X-Target-Colo')
-    const requestTimestamp = request.headers.get('X-Request-Timestamp')
-
-    // Calculate round-trip time if timestamp was sent
-    const roundTripMs = requestTimestamp
-      ? Date.now() - parseInt(requestTimestamp, 10)
-      : undefined
-
-    return new Response(JSON.stringify({
-      // DO info
-      doId: this.state.id.toString(),
-      doName: this.state.id.name ?? null,
-      initTime: this.initTime,
-
-      // Request info
-      requestColo: cf?.colo ?? 'UNKNOWN',
-      workerColo,
-      targetColo,
-      targetColoInfo: targetColo ? getColo(targetColo) : undefined,
-
-      // Timing (helps verify placement - lower = closer)
-      processingMs: processingTime,
-      roundTripMs,
-
-      // Distance calculations (if worker colo is known)
-      distance: workerColo && targetColo ? coloDistance(workerColo, targetColo) : undefined,
-      estimatedLatency: workerColo && targetColo ? estimateLatency(workerColo, targetColo) : undefined,
-    }, null, 2), {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-DO-Processing-Ms': processingTime.toString(),
-      },
-    })
-  }
-}
-
-// Backwards compatibility alias for migration from 'Colo' to 'ColoDO'
-export { ColoDO as Colo }
-
-// ============================================================================
-// Subdomain Routing Helpers
-// ============================================================================
-
-/**
- * Get the base URL for link building
- */
-function getBaseUrl(hostname: string): string {
-  if (hostname.includes('workers.do')) {
-    return 'https://colo.workers.do'
-  }
-  if (hostname.includes('workers.dev')) {
-    return 'https://colo-do.dotdo.workers.dev'
-  }
-  return 'https://colo.do'
-}
-
-/**
- * Build a URL for a specific colo
- */
-function buildColoUrl(baseUrl: string, colo: string, hostname: string): string {
-  // For workers.do, use the suffix pattern
-  if (hostname.includes('workers.do')) {
-    return `https://${colo.toLowerCase()}-colo.workers.do/`
-  }
-  // For colo.do, use subdomain pattern
-  if (hostname.includes('colo.do')) {
-    return `https://${colo.toLowerCase()}.colo.do/`
-  }
-  // Fallback to path-based
-  return `${baseUrl}/${colo}/`
-}
-
-/**
- * City name to IATA code mapping for subdomain aliases
- */
-const CITY_ALIASES: Record<string, string> = {
-  // US Cities
-  'losangeles': 'LAX',
-  'la': 'LAX',
-  'sanfrancisco': 'SFO',
-  'sf': 'SFO',
-  'seattle': 'SEA',
-  'portland': 'PDX',
-  'phoenix': 'PHX',
-  'denver': 'DEN',
-  'saltlakecity': 'SLC',
-  'lasvegas': 'LAS',
-  'vegas': 'LAS',
-  'ashburn': 'IAD',
-  'dc': 'IAD',
-  'washington': 'IAD',
-  'newark': 'EWR',
-  'newyork': 'EWR',
-  'ny': 'EWR',
-  'nyc': 'EWR',
-  'chicago': 'ORD',
-  'atlanta': 'ATL',
-  'dallas': 'DFW',
-  'miami': 'MIA',
-  'boston': 'BOS',
-  'sanjose': 'SJC',
-
-  // Canada
-  'toronto': 'YYZ',
-  'montreal': 'YUL',
-
-  // Europe
-  'london': 'LHR',
-  'amsterdam': 'AMS',
-  'frankfurt': 'FRA',
-  'paris': 'CDG',
-  'madrid': 'MAD',
-  'milan': 'MXP',
-  'dublin': 'DUB',
-  'zurich': 'ZRH',
-  'brussels': 'BRU',
-  'copenhagen': 'CPH',
-  'stockholm': 'ARN',
-  'oslo': 'OSL',
-  'helsinki': 'HEL',
-  'warsaw': 'WAW',
-  'prague': 'PRG',
-  'vienna': 'VIE',
-  'budapest': 'BUD',
-
-  // Asia Pacific
-  'tokyo': 'NRT',
-  'hongkong': 'HKG',
-  'hk': 'HKG',
-  'singapore': 'SIN',
-  'seoul': 'ICN',
-  'mumbai': 'BOM',
-  'delhi': 'DEL',
-  'bangkok': 'BKK',
-  'taipei': 'TPE',
-  'kualalumpur': 'KUL',
-  'kl': 'KUL',
-
-  // Oceania
-  'sydney': 'SYD',
-  'melbourne': 'MEL',
-  'auckland': 'AKL',
-
-  // South America
-  'saopaulo': 'GRU',
-  'rio': 'GIG',
-  'riodejaneiro': 'GIG',
-  'buenosaires': 'EZE',
-  'santiago': 'SCL',
-
-  // Africa
-  'johannesburg': 'JNB',
-  'joburg': 'JNB',
-  'capetown': 'CPT',
-
-  // Middle East
-  'dubai': 'DXB',
-  'telaviv': 'TLV',
-}
-
-/**
- * Parse subdomain to extract colo IATA code
- *
- * Supports:
- * - Direct IATA: lax.colo.do → LAX
- * - City names: london.colo.do → LHR
- * - Suffix pattern: iad-colo.workers.do → IAD
- * - Case insensitive: LAX.colo.do → LAX
- *
- * @returns IATA code or undefined if not a colo subdomain
- */
-function parseSubdomainColo(hostname: string): string | undefined {
-  // Pattern 1: {colo}-colo.workers.do (suffix pattern for testing)
-  // Examples: iad-colo.workers.do, lax-colo.workers.do, london-colo.workers.do
-  const suffixMatch = hostname.match(/^([a-z0-9-]+)-colo\.workers\.do$/i)
-  if (suffixMatch) {
-    const prefix = suffixMatch[1].toLowerCase()
-    return resolveColoFromPrefix(prefix)
-  }
-
-  // Pattern 2: {colo}.colo.do (subdomain pattern for production)
-  // Examples: iad.colo.do, lax.colo.do, london.colo.do
-  const subdomainPatterns = [
-    /^([a-z0-9-]+)\.colo\.do$/i,
-    /^([a-z0-9-]+)\.colo-do\.dotdo\.workers\.dev$/i,
-    /^([a-z0-9-]+)\.localhost$/i,
-  ]
-
-  for (const pattern of subdomainPatterns) {
-    const match = hostname.match(pattern)
-    if (match) {
-      const subdomain = match[1].toLowerCase()
-      return resolveColoFromPrefix(subdomain)
-    }
-  }
-
-  return undefined
-}
-
-/**
- * Resolve a prefix (subdomain or suffix) to a colo IATA code
- */
-function resolveColoFromPrefix(prefix: string): string | undefined {
-  // Skip reserved subdomains
-  if (prefix === 'www' || prefix === 'api' || prefix === 'colo') {
-    return undefined
-  }
-
-  // Check if it's a direct IATA code (3 letters)
-  if (/^[a-z]{3}$/i.test(prefix)) {
-    const iata = prefix.toUpperCase()
-    if (getColo(iata)) {
-      return iata
-    }
-  }
-
-  // Check city aliases (remove hyphens for matching)
-  const normalized = prefix.replace(/-/g, '')
-  const aliasIata = CITY_ALIASES[normalized]
-  if (aliasIata) {
-    return aliasIata
-  }
-
-  return undefined
-}
-
-/**
- * Handle a request routed to a specific colo via subdomain or path
- */
-async function handleColoDORequest(
-  request: Request,
-  namespace: DurableObjectNamespace,
-  targetColo: string,
-  workerColo: string,
-  path: string,
-  corsHeaders: Record<string, string>
-): Promise<Response> {
-  const coloInfo = getColo(targetColo)
-  if (!coloInfo) {
-    return new Response(JSON.stringify({ error: `Unknown colo: ${targetColo}` }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+  constructor(private state: DurableObjectState, env: Env) {
+    this.env = env
+    state.blockConcurrencyWhile(async () => {
+      try {
+        const { colo } = await fetch('https://workers.cloudflare.com/cf.json').then(res => res.json()) as { colo: string }
+        this.colo = colo
+      } catch {
+        this.colo = 'UNKNOWN'
+      }
     })
   }
 
-  // Create DO ID targeting the specific colo
-  const doName = `colo:${targetColo}`
-  const doId = namespace.idFromName(doName)
-  const stub = namespace.get(doId, { locationHint: coloInfo.region })
+  async fetch(req: Request): Promise<Response> {
+    const { pathname, search } = new URL(req.url)
 
-  // Forward request with colo info headers + timestamp for RTT measurement
-  const headers = new Headers(request.headers)
-  headers.set('X-Worker-Colo', workerColo)
-  headers.set('X-Target-Colo', targetColo)
-  headers.set('X-Request-Timestamp', Date.now().toString())
+    // Simple colo check - return just the colo name for root path
+    if (pathname === '/' && !search) {
+      return new Response(this.colo)
+    }
 
-  const forwardUrl = new URL(request.url)
-  forwardUrl.pathname = path
+    // Get user context if CTX binding is available
+    let user: unknown = undefined
+    if (this.env.CTX) {
+      try {
+        const ctxResponse = await this.env.CTX.fetch(req)
+        const ctxData = await ctxResponse.json() as Record<string, unknown>
+        user = ctxData.user
+      } catch {
+        // CTX not available or error
+      }
+    }
 
-  const forwardRequest = new Request(forwardUrl.toString(), {
-    method: request.method,
-    headers,
-    body: request.body,
-  })
+    // Proxy the request to the target URL
+    // pathname is like /workers.cloudflare.com/cf.json
+    const targetUrl = 'https:/' + pathname + search
+    const start = Date.now()
+    let res: Response
+    let error: string | undefined
 
-  const response = await stub.fetch(forwardRequest)
+    try {
+      res = await fetch(targetUrl)
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Fetch failed'
+      return new Response(
+        JSON.stringify({ api, error, colo: { iata: this.colo, city: colos[this.colo.toLowerCase()] } }, null, 2),
+        { headers: { 'content-type': 'application/json; charset=utf-8' }, status: 502 }
+      )
+    }
 
-  // Add CORS headers to response
-  const newHeaders = new Headers(response.headers)
-  for (const [key, value] of Object.entries(corsHeaders)) {
-    newHeaders.set(key, value)
+    const responseTime = Date.now() - start
+    const status = res.status
+    const headers = Object.fromEntries(res.headers)
+
+    let data: unknown
+    const text = await res.text()
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = text
+    }
+
+    const coloInfo = {
+      iata: this.colo,
+      city: colos[this.colo.toLowerCase()] || this.colo,
+    }
+
+    // Build locations map (city name -> URL)
+    const locations = Object.entries(colos).reduce(
+      (acc, [code, name]) => ({
+        ...acc,
+        [name]: `https://${code}.colo.do${pathname}${search}`,
+      }),
+      {} as Record<string, string>
+    )
+
+    return new Response(
+      JSON.stringify({ api, error, colo: coloInfo, responseTime, status, locations, headers, data, user }, null, 2),
+      { headers: { 'content-type': 'application/json; charset=utf-8' } }
+    )
   }
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: newHeaders,
-  })
 }
+
+// Export ColoDO as the primary class name (matches wrangler.toml bindings)
+export { Colo as ColoDO }
+
