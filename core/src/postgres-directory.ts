@@ -12,11 +12,11 @@
  *
  * @example
  * ```typescript
- * import { createPostgresIndex } from 'colo.do'
+ * import { createPostgresDatabases } from 'colo.do'
  *
  * export default {
  *   async fetch(request, env, ctx) {
- *     const index = createPostgresIndex(env)
+ *     const index = createPostgresDatabases(env)
  *
  *     // Fast lookup with SWR caching
  *     const entry = await index.lookup('tenant-123', ctx)
@@ -68,7 +68,7 @@ export interface PostgresTenantEntry {
 /**
  * Configuration for the postgres index
  */
-export interface PostgresIndexConfig {
+export interface PostgresDirectoryConfig {
   /** Cache TTL in seconds (default: 30) */
   cacheTtlSeconds?: number
   /** Stale TTL - how long to serve stale while revalidating (default: 300) */
@@ -82,7 +82,7 @@ export interface PostgresIndexConfig {
 /**
  * Stats returned by the index
  */
-export interface PostgresIndexStats {
+export interface PostgresDirectoryStats {
   /** Number of cache hits */
   cacheHits: number
   /** Number of cache misses */
@@ -110,7 +110,7 @@ export interface RegisterTenantInput {
 /**
  * Environment bindings required for postgres index
  */
-export interface PostgresIndexEnv {
+export interface PostgresDirectoryEnv {
   /** The postgres index durable object namespace (optional - for L2 storage) */
   POSTGRES_INDEX_DO?: DurableObjectNamespace
 }
@@ -119,7 +119,7 @@ export interface PostgresIndexEnv {
 // Constants
 // ============================================================================
 
-const DEFAULT_CONFIG: Required<Omit<PostgresIndexConfig, 'cacheKeyPrefix'>> & { cacheKeyPrefix: string } = {
+const DEFAULT_CONFIG: Required<Omit<PostgresDirectoryConfig, 'cacheKeyPrefix'>> & { cacheKeyPrefix: string } = {
   cacheTtlSeconds: 30,
   staleTtlSeconds: 300,
   cacheKeyPrefix: 'https://postgres-index.internal',
@@ -219,7 +219,7 @@ export function getRegionForColo(colo?: string): string {
 }
 
 // ============================================================================
-// PostgresIndex Implementation
+// PostgresDirectory Implementation
 // ============================================================================
 
 /**
@@ -229,11 +229,11 @@ export function getRegionForColo(colo?: string): string {
  *
  * @param env - Environment bindings (POSTGRES_INDEX_DO optional for L2)
  * @param config - Index configuration
- * @returns PostgresIndex instance
+ * @returns PostgresDirectory instance
  *
  * @example
  * ```typescript
- * const index = createPostgresIndex(env, {
+ * const index = createPostgresDatabases(env, {
  *   cacheTtlSeconds: 30,
  *   staleTtlSeconds: 300,
  * })
@@ -252,9 +252,9 @@ export function getRegionForColo(colo?: string): string {
  * console.log(index.getStats())
  * ```
  */
-export function createPostgresIndex(
-  env: PostgresIndexEnv,
-  config: PostgresIndexConfig = {}
+export function createPostgresDatabases(
+  env: PostgresDirectoryEnv,
+  config: PostgresDirectoryConfig = {}
 ) {
   const mergedConfig = { ...DEFAULT_CONFIG, ...config }
   const { cacheTtlSeconds, staleTtlSeconds, cacheKeyPrefix, trackAccessTime } = mergedConfig
@@ -381,7 +381,7 @@ export function createPostgresIndex(
   /**
    * Get current stats
    */
-  function getStats(): PostgresIndexStats {
+  function getStats(): PostgresDirectoryStats {
     const total = cacheHits + cacheMisses
     return {
       cacheHits,
@@ -499,7 +499,7 @@ export function createPostgresIndex(
 }
 
 // ============================================================================
-// PostgresIndexDO - Durable Object for L2 Storage
+// PostgresDatabases - Durable Object for L2 Storage
 // ============================================================================
 
 /**
@@ -512,13 +512,13 @@ export function createPostgresIndex(
  * // In wrangler.toml:
  * [[durable_objects.bindings]]
  * name = "POSTGRES_INDEX_DO"
- * class_name = "PostgresIndexDO"
+ * class_name = "PostgresDatabases"
  *
  * // Export from worker:
- * export { PostgresIndexDO } from 'colo.do'
+ * export { PostgresDatabases } from 'colo.do'
  * ```
  */
-export class PostgresIndexDO {
+export class PostgresDatabases {
   private sql: DurableObjectStorage['sql']
   private initialized = false
 

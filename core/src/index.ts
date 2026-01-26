@@ -123,15 +123,15 @@ export {
 
 // PostgreSQL Index for postgres.do tenant routing
 export {
-  createPostgresIndex,
+  createPostgresDatabases,
   getRegionForColo,
-  PostgresIndexDO,
+  PostgresDatabases,
   type PostgresTenantEntry,
-  type PostgresIndexConfig,
-  type PostgresIndexStats,
-  type PostgresIndexEnv,
+  type PostgresDirectoryConfig,
+  type PostgresDirectoryStats,
+  type PostgresDirectoryEnv,
   type RegisterTenantInput,
-} from './postgres-index.js'
+} from './postgres-directory.js'
 
 // DORegistry - 31x faster DO ID resolution
 export {
