@@ -2,11 +2,12 @@ name = "colo-do"
 main = "core/src/worker.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "b6641681fe423910342b9ffa1364c76d"
 
-# Routes
-routes = [
-  { pattern = "colo.do", custom_domain = true }
-]
+# Custom domain (requires DNS to be managed in Cloudflare)
+# routes = [
+#   { pattern = "colo.do", custom_domain = true }
+# ]
 
 # Durable Objects
 [durable_objects]
@@ -22,3 +23,7 @@ new_classes = ["ColoDO"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["DORegistryDO"]
+
+[[migrations]]
+tag = "v3"
+renamed_classes = [{ from = "Colo", to = "ColoDO" }]

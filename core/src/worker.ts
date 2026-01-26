@@ -324,3 +324,6 @@ export class ColoDO implements DurableObject {
     })
   }
 }
+
+// Backwards compatibility alias for migration from 'Colo' to 'ColoDO'
+export { ColoDO as Colo }
