@@ -142,11 +142,18 @@ export class ColoServiceDO implements DurableObject {
         return this.json(result)
       }
 
+      // Move DO (prepare instructions)
+      if (path === '/move' && request.method === 'POST') {
+        const body = await request.json() as MoveDOOptions
+        const result = this.prepareMoveInstructions(body)
+        return this.json(result)
+      }
+
       // Parse name
       if (path === '/parse') {
         const name = url.searchParams.get('name')
         if (!name) {
-          return this.json({ error: 'name parameter required' }, 400)
+          return this.json({ error: 'name parameter required', code: 'MISSING_PARAM' }, 400)
         }
         const result = this.parseName(name)
         return this.json(result)
@@ -156,13 +163,27 @@ export class ColoServiceDO implements DurableObject {
       if (path === '/location') {
         const name = url.searchParams.get('name')
         if (!name) {
-          return this.json({ error: 'name parameter required' }, 400)
+          return this.json({ error: 'name parameter required', code: 'MISSING_PARAM' }, 400)
         }
         const result = this.getLocation(name)
         return this.json(result)
       }
 
-      return this.json({ error: 'Not found' }, 404)
+      // List all DO-capable colos
+      if (path === '/colos') {
+        return this.json({ colos: this.listColos() })
+      }
+
+      // Validate a colo
+      if (path === '/validate') {
+        const colo = url.searchParams.get('colo')
+        if (!colo) {
+          return this.json({ error: 'colo parameter required', code: 'MISSING_PARAM' }, 400)
+        }
+        return this.json({ colo, valid: this.isValidColo(colo) })
+      }
+
+      return this.json({ error: 'Not found', code: 'NOT_FOUND' }, 404)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       return this.json({ error: message }, 500)
@@ -429,7 +450,7 @@ export function createColoClient(service: Fetcher): ColoClient {
         const error = await response.json() as { error: string }
         throw new Error(error.error)
       }
-      return response.json()
+      return response.json() as Promise<MoveDOResult>
     },
 
     async parseName(name: string): Promise<{ colo: string | null; suffix: string | null; valid: boolean }> {

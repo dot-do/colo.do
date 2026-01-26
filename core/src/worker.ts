@@ -72,35 +72,141 @@ export default {
       // ================================================================
       // Subdomain-based routing: {colo}.colo.do/*
       // Examples:
-      //   lax.colo.do/query → LAX
-      //   iad.colo.do/api → IAD
-      //   london.colo.do/data → LHR (city alias)
+      //   lax.colo.do/ → API info for LAX colo
+      //   lax.colo.do/query → route to LAX DO
+      //   iad.colo.do/api → IAD API info
+      //   london.colo.do/data → route to LHR DO
       // ================================================================
       const subdomainColo = parseSubdomainColo(hostname)
-      if (subdomainColo && env.COLO_DO) {
-        return handleColoDORequest(
-          request,
-          env.COLO_DO,
-          subdomainColo,
-          location.colo,
-          path,
-          corsHeaders
-        )
+      if (subdomainColo) {
+        const coloInfo = getColo(subdomainColo)
+
+        // For root path or /api, show API response for this colo
+        if (path === '/' || path === '' || path === '/api' || path === '/api/') {
+          const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
+          const baseUrl = getBaseUrl(hostname)
+
+          // Build colo switching links
+          const coloLinks: Record<string, string> = {}
+          const majorColos = ['IAD', 'ORD', 'LAX', 'SFO', 'SEA', 'LHR', 'AMS', 'FRA', 'NRT', 'SIN', 'SYD']
+          for (const colo of majorColos) {
+            coloLinks[colo.toLowerCase()] = buildColoUrl(baseUrl, colo, hostname)
+          }
+
+          return json({
+            api: {
+              name: 'colo.do',
+              description: 'Location-aware Durable Objects',
+              version: '1.0',
+              docs: 'https://github.com/dot-do/colo.do',
+              npm: 'https://npmjs.com/package/colo.do',
+            },
+            colos: {
+              current: subdomainColo,
+              info: coloInfo,
+              switch: coloLinks,
+              all: `${baseUrl}/api/colos`,
+              nearest: `${baseUrl}/api/nearest`,
+            },
+            service: {
+              create: `${baseUrl}/service/create`,
+              parse: `${baseUrl}/service/parse`,
+              location: `${baseUrl}/service/location`,
+            },
+            meta: {
+              requestId: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              method: request.method,
+              url: request.url,
+              userAgent: request.headers.get('User-Agent') || 'Unknown',
+              edgeLocation: location.city || 'Unknown',
+              edgeColo: location.colo,
+              targetColo: subdomainColo,
+              httpProtocol: cf?.httpProtocol || 'Unknown',
+              tlsVersion: cf?.tlsVersion || 'Unknown',
+            },
+            user: {
+              ip: cf?.clientTcpRtt ? 'hidden' : request.headers.get('CF-Connecting-IP') || 'Unknown',
+              city: location.city || 'Unknown',
+              region: location.region || 'Unknown',
+              country: location.country || 'Unknown',
+              timezone: location.timezone || 'Unknown',
+              latitude: location.latitude?.toString() || 'Unknown',
+              longitude: location.longitude?.toString() || 'Unknown',
+              colo: location.colo,
+              coloInfo: location.coloInfo,
+              nearestColos: sortByDistance(location.colo).slice(0, 5),
+            },
+          }, corsHeaders)
+        }
+
+        // For other paths, route to the DO in that colo
+        if (env.COLO_DO) {
+          return handleColoDORequest(
+            request,
+            env.COLO_DO,
+            subdomainColo,
+            location.colo,
+            path,
+            corsHeaders
+          )
+        }
       }
-      // API routes
-      if (path === '/api' || path === '/api/') {
+      // API routes - match colo.do JSON structure
+      if (path === '/api' || path === '/api/' || path === '/' || path === '') {
+        const cf = (request as unknown as { cf?: IncomingRequestCfProperties }).cf
+
+        // Build colo switching links
+        const baseUrl = getBaseUrl(hostname)
+        const coloLinks: Record<string, string> = {}
+        const majorColos = ['IAD', 'ORD', 'LAX', 'SFO', 'SEA', 'LHR', 'AMS', 'FRA', 'NRT', 'SIN', 'SYD']
+        for (const colo of majorColos) {
+          coloLinks[colo.toLowerCase()] = buildColoUrl(baseUrl, colo, hostname)
+        }
+
         return json({
-          colo: location.colo,
-          coloInfo: location.coloInfo,
-          visitor: {
-            latitude: location.latitude,
-            longitude: location.longitude,
-            country: location.country,
-            city: location.city,
-            region: location.region,
-            timezone: location.timezone,
+          api: {
+            name: 'colo.do',
+            description: 'Location-aware Durable Objects',
+            version: '1.0',
+            docs: 'https://github.com/dot-do/colo.do',
+            npm: 'https://npmjs.com/package/colo.do',
           },
-          nearestColos: sortByDistance(location.colo).slice(0, 10),
+          colos: {
+            current: location.colo,
+            info: location.coloInfo,
+            switch: coloLinks,
+            all: `${baseUrl}/api/colos`,
+            nearest: `${baseUrl}/api/nearest`,
+          },
+          service: {
+            create: `${baseUrl}/service/create`,
+            parse: `${baseUrl}/service/parse`,
+            location: `${baseUrl}/service/location`,
+          },
+          meta: {
+            requestId: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            method: request.method,
+            url: request.url,
+            userAgent: request.headers.get('User-Agent') || 'Unknown',
+            edgeLocation: location.city || 'Unknown',
+            edgeColo: location.colo,
+            httpProtocol: cf?.httpProtocol || 'Unknown',
+            tlsVersion: cf?.tlsVersion || 'Unknown',
+          },
+          user: {
+            ip: cf?.clientTcpRtt ? 'hidden' : request.headers.get('CF-Connecting-IP') || 'Unknown',
+            city: location.city || 'Unknown',
+            region: location.region || 'Unknown',
+            country: location.country || 'Unknown',
+            timezone: location.timezone || 'Unknown',
+            latitude: location.latitude?.toString() || 'Unknown',
+            longitude: location.longitude?.toString() || 'Unknown',
+            colo: location.colo,
+            coloInfo: location.coloInfo,
+            nearestColos: sortByDistance(location.colo).slice(0, 5),
+          },
         }, corsHeaders)
       }
 
@@ -442,6 +548,35 @@ export { ColoDO as Colo }
 // ============================================================================
 
 /**
+ * Get the base URL for link building
+ */
+function getBaseUrl(hostname: string): string {
+  if (hostname.includes('workers.do')) {
+    return 'https://colo.workers.do'
+  }
+  if (hostname.includes('workers.dev')) {
+    return 'https://colo-do.dotdo.workers.dev'
+  }
+  return 'https://colo.do'
+}
+
+/**
+ * Build a URL for a specific colo
+ */
+function buildColoUrl(baseUrl: string, colo: string, hostname: string): string {
+  // For workers.do, use the suffix pattern
+  if (hostname.includes('workers.do')) {
+    return `https://${colo.toLowerCase()}-colo.workers.do/`
+  }
+  // For colo.do, use subdomain pattern
+  if (hostname.includes('colo.do')) {
+    return `https://${colo.toLowerCase()}.colo.do/`
+  }
+  // Fallback to path-based
+  return `${baseUrl}/${colo}/`
+}
+
+/**
  * City name to IATA code mapping for subdomain aliases
  */
 const CITY_ALIASES: Record<string, string> = {
@@ -535,49 +670,61 @@ const CITY_ALIASES: Record<string, string> = {
  * Supports:
  * - Direct IATA: lax.colo.do → LAX
  * - City names: london.colo.do → LHR
+ * - Suffix pattern: iad-colo.workers.do → IAD
  * - Case insensitive: LAX.colo.do → LAX
  *
  * @returns IATA code or undefined if not a colo subdomain
  */
 function parseSubdomainColo(hostname: string): string | undefined {
-  // Match patterns:
-  // - {colo}.colo.do
-  // - {colo}.colo-do.dotdo.workers.dev
-  // - {colo}.localhost (for local dev)
+  // Pattern 1: {colo}-colo.workers.do (suffix pattern for testing)
+  // Examples: iad-colo.workers.do, lax-colo.workers.do, london-colo.workers.do
+  const suffixMatch = hostname.match(/^([a-z0-9-]+)-colo\.workers\.do$/i)
+  if (suffixMatch) {
+    const prefix = suffixMatch[1].toLowerCase()
+    return resolveColoFromPrefix(prefix)
+  }
 
-  const patterns = [
+  // Pattern 2: {colo}.colo.do (subdomain pattern for production)
+  // Examples: iad.colo.do, lax.colo.do, london.colo.do
+  const subdomainPatterns = [
     /^([a-z0-9-]+)\.colo\.do$/i,
     /^([a-z0-9-]+)\.colo-do\.dotdo\.workers\.dev$/i,
     /^([a-z0-9-]+)\.localhost$/i,
   ]
 
-  for (const pattern of patterns) {
+  for (const pattern of subdomainPatterns) {
     const match = hostname.match(pattern)
     if (match) {
       const subdomain = match[1].toLowerCase()
-
-      // Skip 'www' and 'api' subdomains
-      if (subdomain === 'www' || subdomain === 'api') {
-        return undefined
-      }
-
-      // Check if it's a direct IATA code (3 letters)
-      if (/^[a-z]{3}$/i.test(subdomain)) {
-        const iata = subdomain.toUpperCase()
-        if (getColo(iata)) {
-          return iata
-        }
-      }
-
-      // Check city aliases
-      const aliasIata = CITY_ALIASES[subdomain.replace(/-/g, '')]
-      if (aliasIata) {
-        return aliasIata
-      }
-
-      // Not a valid colo subdomain
-      return undefined
+      return resolveColoFromPrefix(subdomain)
     }
+  }
+
+  return undefined
+}
+
+/**
+ * Resolve a prefix (subdomain or suffix) to a colo IATA code
+ */
+function resolveColoFromPrefix(prefix: string): string | undefined {
+  // Skip reserved subdomains
+  if (prefix === 'www' || prefix === 'api' || prefix === 'colo') {
+    return undefined
+  }
+
+  // Check if it's a direct IATA code (3 letters)
+  if (/^[a-z]{3}$/i.test(prefix)) {
+    const iata = prefix.toUpperCase()
+    if (getColo(iata)) {
+      return iata
+    }
+  }
+
+  // Check city aliases (remove hyphens for matching)
+  const normalized = prefix.replace(/-/g, '')
+  const aliasIata = CITY_ALIASES[normalized]
+  if (aliasIata) {
+    return aliasIata
   }
 
   return undefined
