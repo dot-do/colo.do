@@ -107,97 +107,68 @@ const colos: Record<string, string> = {
   jnb: 'Johannesburg', cpt: 'CapeTown', cai: 'Cairo', los: 'Lagos', nbo: 'Nairobi',
 }
 
-// Organized by region for the locations response
-const colosByRegion: Record<string, Record<string, Record<string, string>>> = {
-  NorthAmerica: {
-    West: {
-      sjc: 'SanJose', lax: 'LosAngeles', sea: 'Seattle', sfo: 'SanFrancisco',
-      pdx: 'Portland', phx: 'Phoenix', den: 'Denver', slc: 'SaltLakeCity',
-      las: 'LasVegas', san: 'SanDiego', smf: 'Sacramento',
-    },
-    Central: {
-      ord: 'Chicago', dfw: 'Dallas', iah: 'Houston', msp: 'Minneapolis',
-      mci: 'KansasCity', stl: 'StLouis', aus: 'Austin', sat: 'SanAntonio',
-      oma: 'Omaha', okc: 'OklahomaCity',
-    },
-    East: {
-      iad: 'Ashburn', ewr: 'Newark', atl: 'Atlanta', mia: 'Miami', bos: 'Boston',
-      clt: 'Charlotte', dtw: 'Detroit', phl: 'Philadelphia', rdu: 'Raleigh',
-      tpa: 'Tampa', mco: 'Orlando', bna: 'Nashville', ind: 'Indianapolis',
-      cmh: 'Columbus', cle: 'Cleveland', pit: 'Pittsburgh', buf: 'Buffalo',
-      cvg: 'Cincinnati', jax: 'Jacksonville',
-    },
-  },
-  Canada: {
-    _: { yyz: 'Toronto', yul: 'Montreal', yvr: 'Vancouver', yyc: 'Calgary', yow: 'Ottawa' },
-  },
-  Europe: {
-    West: {
-      lhr: 'London', ams: 'Amsterdam', fra: 'Frankfurt', cdg: 'Paris', mad: 'Madrid',
-      mxp: 'Milan', dub: 'Dublin', zrh: 'Zurich', bru: 'Brussels', mrs: 'Marseille',
-      lis: 'Lisbon', bcn: 'Barcelona', man: 'Manchester', fco: 'Rome', muc: 'Munich',
-      dus: 'Dusseldorf', ham: 'Hamburg', txl: 'Berlin', vie: 'Vienna',
-    },
-    North: { cph: 'Copenhagen', arn: 'Stockholm', osl: 'Oslo', hel: 'Helsinki' },
-    East: { waw: 'Warsaw', prg: 'Prague', bud: 'Budapest' },
-  },
-  Asia: {
-    East: {
-      nrt: 'Tokyo', hkg: 'HongKong', icn: 'Seoul', tpe: 'Taipei',
-      kix: 'Osaka', fuk: 'Fukuoka', oka: 'Okinawa',
-    },
-    Southeast: {
-      sin: 'Singapore', bkk: 'Bangkok', kul: 'KualaLumpur', cgk: 'Jakarta',
-      mnl: 'Manila', sgn: 'HoChiMinhCity', han: 'Hanoi',
-    },
-    South: {
-      bom: 'Mumbai', del: 'Delhi', blr: 'Bangalore', maa: 'Chennai',
-      hyd: 'Hyderabad', ccu: 'Kolkata',
-    },
-  },
-  MiddleEast: {
-    _: {
-      dxb: 'Dubai', tlv: 'TelAviv', doh: 'Doha', auh: 'AbuDhabi',
-      bah: 'Bahrain', kwi: 'Kuwait', mct: 'Muscat', ruh: 'Riyadh', jed: 'Jeddah',
-    },
-  },
-  Oceania: {
-    _: {
-      syd: 'Sydney', mel: 'Melbourne', akl: 'Auckland', bne: 'Brisbane',
-      per: 'Perth', adl: 'Adelaide', chc: 'Christchurch', wlg: 'Wellington',
-    },
-  },
-  SouthAmerica: {
-    _: {
-      gru: 'SaoPaulo', gig: 'RioDeJaneiro', eze: 'BuenosAires',
-      scl: 'Santiago', bog: 'Bogota', lim: 'Lima',
-    },
-  },
-  Africa: {
-    _: { jnb: 'Johannesburg', cpt: 'CapeTown', cai: 'Cairo', los: 'Lagos', nbo: 'Nairobi' },
-  },
+// Region mapping from COLOS region codes to human-readable names
+const regionNames: Record<string, string> = {
+  wnam: 'NorthAmerica.West',
+  enam: 'NorthAmerica.East',
+  weur: 'Europe.West',
+  eeur: 'Europe.East',
+  apac: 'Asia',
+  oc: 'Oceania',
+  sam: 'SouthAmerica',
+  afr: 'Africa',
+  me: 'MiddleEast',
 }
 
-// Build nested locations URLs from the region structure
-function buildLocationsByRegion(pathname: string, search: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  for (const [region, subregions] of Object.entries(colosByRegion)) {
-    const regionResult: Record<string, unknown> = {}
-    for (const [subregion, cities] of Object.entries(subregions)) {
-      const subregionResult: Record<string, string> = {}
-      for (const [code, name] of Object.entries(cities)) {
-        subregionResult[name] = `https://${code}.colo.do${pathname}${search}`
+// Build locations dynamically from registered colos
+async function buildLocationsByRegion(
+  pathname: string,
+  search: string,
+  env: Env
+): Promise<Record<string, unknown>> {
+  // Fetch registered colos from registry
+  let registeredColos: Array<{ name: string; colo: string; city?: string }> = []
+
+  if (env.DO_REGISTRY) {
+    try {
+      const registryId = env.DO_REGISTRY.idFromName('index')
+      const registryStub = env.DO_REGISTRY.get(registryId)
+      const res = await registryStub.fetch('https://internal/')
+      if (res.ok) {
+        const data = await res.json() as { colos: Array<{ name: string; colo: string; city?: string }> }
+        registeredColos = data.colos
       }
-      if (subregion === '_') {
-        // Flatten single-level regions (Canada, MiddleEast, etc.)
-        Object.assign(regionResult, subregionResult)
-      } else {
-        regionResult[subregion] = subregionResult
-      }
+    } catch {
+      // Fall back to empty if registry unavailable
     }
-    result[region] = regionResult
   }
-  return result
+
+  // Build nested structure by region
+  const result: Record<string, Record<string, string>> = {}
+
+  for (const entry of registeredColos) {
+    const iata = entry.colo.toUpperCase()
+    const coloInfo = COLOS[iata]
+    if (!coloInfo) continue
+
+    const regionKey = regionNames[coloInfo.region] || 'Other'
+    const cityName = entry.city || coloInfo.city || iata
+
+    if (!result[regionKey]) {
+      result[regionKey] = {}
+    }
+    result[regionKey][cityName] = `https://${iata.toLowerCase()}.colo.do${pathname}${search}`
+  }
+
+  // Sort cities within each region
+  const sorted: Record<string, Record<string, string>> = {}
+  for (const [region, cities] of Object.entries(result)) {
+    sorted[region] = Object.fromEntries(
+      Object.entries(cities).sort(([a], [b]) => a.localeCompare(b))
+    )
+  }
+
+  return sorted
 }
 
 /**
@@ -650,8 +621,8 @@ export class Colo {
       match: requestedColo === this.colo,
     }
 
-    // Build locations map organized by region
-    const locations = buildLocationsByRegion(pathname, search)
+    // Build locations map organized by region (dynamic from registry)
+    const locations = await buildLocationsByRegion(pathname, search, this.env)
 
     return new Response(
       JSON.stringify({ api, error, colo: coloInfo, responseTime, status, locations, headers, data, user }, null, 2),
