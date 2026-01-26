@@ -121,18 +121,6 @@ export {
   type CachedEnvOptions,
 } from './cached-registry.js'
 
-// PostgreSQL Index for postgres.do tenant routing
-export {
-  createPostgresDatabases,
-  getRegionForColo,
-  PostgresDatabases,
-  type PostgresTenantEntry,
-  type PostgresDirectoryConfig,
-  type PostgresDirectoryStats,
-  type PostgresDirectoryEnv,
-  type RegisterTenantInput,
-} from './postgres-directory.js'
-
 // DORegistry - 31x faster DO ID resolution
 export {
   // Factory function
