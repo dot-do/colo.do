@@ -5,9 +5,14 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "b6641681fe423910342b9ffa1364c76d"
 workers_dev = true
 
-# Routes
+# Routes. Never a bare-star host like "*colo.workers.do/*": a route's * spans
+# "/", so it also caught https://api.sb/colo.workers.do/... and
+# headless.ly/x/colo.workers.do/y (fixed on the zone 2026-09-28,
+# ~/projects/domains scripts/fix-workers-do-broad-routes.mjs). No
+# *.colo.workers.do host serves (TLS), and that form also caught api.sb paths.
+# "*colo.do/*" on the colo.do zone has the same shape; left as is.
 routes = [
-  { pattern = "*colo.workers.do/*", zone_name = "workers.do" },
+  { pattern = "colo.workers.do/*", zone_name = "workers.do" },
   { pattern = "*colo.do/*", zone_name = "colo.do" }
 ]
 
